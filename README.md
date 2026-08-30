@@ -66,16 +66,20 @@ A product's trail — `Home & Kitchen > Kitchen & Dining > Small Appliances >
 Blenders > Personal Size Blenders` — is a tree rather than a sentence, so it
 lives in `categories`: a row per node naming the parent it hangs from, with
 `products.category_id` pointing at the leaf. A branch that two trails share is
-one row, so what sits under `Kitchen & Dining` is a question about the tree
-instead of a string match, and `parent_id` walks it in either direction. A
-catalog that still holds its trails in a cell grows the tree from them the next
-time it is opened.
+one row, so what sits under `Kitchen & Dining` is a walk down `parent_id`
+rather than a match against a string, and the same column walks back up to read
+a trail out. A node's name is unique among its siblings and nowhere else, which
+is what lets `Accessories` sit under both `Electronics` and `Books` without the
+two being confused. A catalog that still holds its trails in a cell grows the
+tree from them the next time it is opened.
 
 ```sh
 psql "$DATABASE_URL" -c \
-  "SELECT p.title, p.price FROM products p
-     JOIN categories c ON c.id = p.category_id
-   WHERE c.path LIKE 'Home & Kitchen > Kitchen & Dining > %'
+  "WITH RECURSIVE sub AS (
+     SELECT id FROM categories WHERE parent_id IS NULL AND name = 'Home & Kitchen'
+     UNION ALL
+     SELECT c.id FROM categories c JOIN sub ON c.parent_id = sub.id)
+   SELECT p.title, p.price FROM products p JOIN sub ON sub.id = p.category_id
    ORDER BY p.price"
 ```
 

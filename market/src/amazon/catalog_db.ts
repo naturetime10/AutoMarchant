@@ -10,17 +10,20 @@ import { type Product, readByline } from "./product.ts";
  */
 const SCHEMA = `
   -- A department's trail is a tree, not a sentence: "Kitchen & Dining" is one
-  -- node that many trails pass through. Each node is a row naming its parent,
-  -- so a branch two products share is stored once and can be asked what hangs
-  -- beneath it. The full path rides along as the node's name in the world,
-  -- which is what makes a trail resolve to a node in one statement per level.
+  -- node that many trails pass through. Each node is a row naming the parent
+  -- it hangs from, so a branch two trails share is stored once, and what sits
+  -- beneath a node is a walk down parent_id rather than a match on a string.
   CREATE TABLE IF NOT EXISTS categories (
     id SERIAL PRIMARY KEY,
     parent_id INTEGER REFERENCES categories (id) ON DELETE CASCADE,
-    name TEXT NOT NULL,
-    path TEXT NOT NULL UNIQUE
+    name TEXT NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS categories_parent ON categories (parent_id);
+  -- A name is unique among its siblings, and the roots are siblings of one
+  -- another: NULLS NOT DISTINCT is what makes a second "Home & Kitchen" at the
+  -- top collide with the first rather than sit beside it. It indexes
+  -- parent_id first, so it is also how the tree is walked downward.
+  CREATE UNIQUE INDEX IF NOT EXISTS categories_trail
+    ON categories (parent_id, name) NULLS NOT DISTINCT;
 
   CREATE TABLE IF NOT EXISTS products (
     asin TEXT PRIMARY KEY,
@@ -123,7 +126,7 @@ const SCHEMA = `
 
 /** Every table and its columns, in order. */
 export const TABLES = {
-  categories: ["id", "parent_id", "name", "path"],
+  categories: ["id", "parent_id", "name"],
   products: [
     "asin",
     "url",
@@ -243,29 +246,23 @@ export class CatalogDb {
    */
   private async categoryFor(trail: string[]): Promise<number | null> {
     let parent: number | null = null;
-    let path = "";
 
     for (const name of trail.filter((name) => name !== "")) {
-      path = path === "" ? name : `${path} > ${name}`;
-      parent = await this.node(parent, name, path);
+      parent = await this.node(parent, name);
     }
 
     return parent;
   }
 
   /** One level of a trail: the row that is there, or the row it becomes. */
-  private async node(
-    parent: number | null,
-    name: string,
-    path: string,
-  ): Promise<number> {
+  private async node(parent: number | null, name: string): Promise<number> {
     // The upsert has to update something for RETURNING to answer with a row
     // that was already there, so it writes back the name it just read.
     const { rows } = await this.client.queryArray<[number]>(
-      `INSERT INTO categories (parent_id, name, path) VALUES ($1, $2, $3)
-       ON CONFLICT (path) DO UPDATE SET name = excluded.name
+      `INSERT INTO categories (parent_id, name) VALUES ($1, $2)
+       ON CONFLICT (parent_id, name) DO UPDATE SET name = excluded.name
        RETURNING id`,
-      [parent, name, path],
+      [parent, name],
     );
     return rows[0][0];
   }

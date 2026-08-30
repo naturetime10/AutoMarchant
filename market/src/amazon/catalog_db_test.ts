@@ -61,12 +61,24 @@ const query = async <T>(sql: string, args: unknown[] = []): Promise<T[]> => {
   }
 };
 
+/**
+ * Every node with the trail that reaches it, walked down from the roots. The
+ * tree keeps no path of its own, so the tests derive one to read it by.
+ */
+const PATHS = `
+  WITH RECURSIVE paths AS (
+    SELECT id, name AS path FROM categories WHERE parent_id IS NULL
+    UNION ALL
+    SELECT c.id, p.path || ' > ' || c.name
+      FROM categories c JOIN paths p ON p.id = c.parent_id
+  )`;
+
 /** The trail a product is filed under, as the leaf's full path. */
 const categoryOf = async (asin: string): Promise<string | null> => {
   const [row] = await query<{ path: string | null }>(
-    `SELECT c.path FROM products
-       LEFT JOIN categories c ON c.id = products.category_id
-      WHERE products.asin = $1`,
+    `${PATHS}
+     SELECT (SELECT path FROM paths WHERE paths.id = products.category_id)
+       FROM products WHERE asin = $1`,
     [asin],
   );
   return row.path;
@@ -75,16 +87,23 @@ const categoryOf = async (asin: string): Promise<string | null> => {
 /** The whole tree, each node beside the parent it hangs from. */
 const tree = () =>
   query<{ name: string; parent: string | null }>(
-    `SELECT c.name, p.name AS parent
-       FROM categories c LEFT JOIN categories p ON p.id = c.parent_id
-      ORDER BY c.path`,
+    `${PATHS}
+     SELECT c.name, p.name AS parent FROM categories c
+       LEFT JOIN categories p ON p.id = c.parent_id
+       JOIN paths ON paths.id = c.id
+      ORDER BY paths.path`,
   );
 
 /** The products filed under a trail, or anywhere beneath it. */
 const under = async (path: string): Promise<string[]> => {
   const rows = await query<{ asin: string }>(
-    `SELECT p.asin FROM products p JOIN categories c ON c.id = p.category_id
-      WHERE c.path = $1 OR c.path LIKE $1 || ' > %'
+    // The trail names where to start; parent_id carries it the rest of the way.
+    `${PATHS}, sub AS (
+       SELECT id FROM paths WHERE path = $1
+       UNION ALL
+       SELECT c.id FROM categories c JOIN sub ON c.parent_id = sub.id
+     )
+     SELECT p.asin FROM products p JOIN sub ON sub.id = p.category_id
       ORDER BY p.asin`,
     [path],
   );
