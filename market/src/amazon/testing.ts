@@ -29,8 +29,8 @@ export async function truncate(): Promise<void> {
   await client.connect();
   try {
     await client.queryArray(
-      "TRUNCATE products, attributes, features, images, reviews, questions, " +
-        "styling_ideas, captures CASCADE",
+      "TRUNCATE products, categories, attributes, features, images, reviews, " +
+        "questions, styling_ideas, captures CASCADE",
     );
   } catch {
     // Nothing to empty until the first test creates the schema.

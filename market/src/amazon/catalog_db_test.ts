@@ -26,6 +26,15 @@ const product = (asin: string, over: Partial<Product> = {}): Product => ({
   ...over,
 });
 
+/** A trail deep enough to have a shape worth keeping. */
+const BLENDERS = [
+  "Home & Kitchen",
+  "Kitchen & Dining",
+  "Small Appliances",
+  "Blenders",
+  "Personal Size Blenders",
+];
+
 /** A catalog on the test database, emptied before the test runs. */
 const inDb = async (body: (db: CatalogDb) => Promise<void>) => {
   await truncate();
@@ -50,6 +59,67 @@ const query = async <T>(sql: string, args: unknown[] = []): Promise<T[]> => {
   } finally {
     await client.end();
   }
+};
+
+/**
+ * Every node with the trail that reaches it, walked down from the roots. The
+ * tree keeps no path of its own, so the tests derive one to read it by.
+ */
+const PATHS = `
+  WITH RECURSIVE paths AS (
+    SELECT id, name AS path FROM categories WHERE parent_id IS NULL
+    UNION ALL
+    SELECT c.id, p.path || ' > ' || c.name
+      FROM categories c JOIN paths p ON p.id = c.parent_id
+  )`;
+
+/** The trail a product is filed under, as the leaf's full path. */
+const categoryOf = async (asin: string): Promise<string | null> => {
+  const [row] = await query<{ path: string | null }>(
+    `${PATHS}
+     SELECT (SELECT path FROM paths WHERE paths.id = products.category_id)
+       FROM products WHERE asin = $1`,
+    [asin],
+  );
+  return row.path;
+};
+
+/** The whole tree, each node beside the parent it hangs from. */
+const tree = () =>
+  query<{ name: string; parent: string | null }>(
+    `${PATHS}
+     SELECT c.name, p.name AS parent FROM categories c
+       LEFT JOIN categories p ON p.id = c.parent_id
+       JOIN paths ON paths.id = c.id
+      ORDER BY paths.path`,
+  );
+
+/** The products filed under a trail, or anywhere beneath it. */
+const under = async (path: string): Promise<string[]> => {
+  const rows = await query<{ asin: string }>(
+    // The trail names where to start; parent_id carries it the rest of the way.
+    `${PATHS}, sub AS (
+       SELECT id FROM paths WHERE path = $1
+       UNION ALL
+       SELECT c.id FROM categories c JOIN sub ON c.parent_id = sub.id
+     )
+     SELECT p.asin FROM products p JOIN sub ON sub.id = p.category_id
+      ORDER BY p.asin`,
+    [path],
+  );
+  return rows.map((row) => row.asin);
+};
+
+// Scoped to public: information_schema has an "attributes" view of its own,
+// whose columns would otherwise be mixed in.
+const columnsOf = async (table: string): Promise<string[]> => {
+  const rows = await query<{ column_name: string }>(
+    `SELECT column_name FROM information_schema.columns
+      WHERE table_schema = 'public' AND table_name = $1
+      ORDER BY ordinal_position`,
+    [table],
+  );
+  return rows.map((row) => row.column_name);
 };
 
 const count = async (table: string, asin: string): Promise<number> => {
@@ -83,7 +153,6 @@ test("CatalogDb stores the scalars a spreadsheet would total", async () => {
     assertEquals(row.rating_average, 4.5);
     assertEquals(row.rating_count, 12);
     assertEquals(row.sold_by, "AnkerDirect");
-    assertEquals(row.breadcrumbs, "Electronics > Cables");
     assertEquals(
       (row.captured_at as Date).toISOString(),
       "2026-08-29T00:00:00.000Z",
@@ -200,15 +269,7 @@ test("CatalogDb declares the same columns the schema creates", async () => {
     await db.save(product("B000000001"), []);
 
     for (const [table, columns] of Object.entries(TABLES)) {
-      const actual = await query<{ column_name: string }>(
-        // Scoped to public: information_schema has an "attributes" view of
-        // its own, whose columns would otherwise be mixed in.
-        `SELECT column_name FROM information_schema.columns
-         WHERE table_schema = 'public' AND table_name = $1
-         ORDER BY ordinal_position`,
-        [table],
-      );
-      assertEquals(actual.map((row) => row.column_name), [...columns], table);
+      assertEquals(await columnsOf(table), [...columns], table);
     }
   });
 });
@@ -276,4 +337,110 @@ test("CatalogDb leaves a storefront byline where it is", async () => {
     await query("SELECT author, brand, store_name FROM products"),
     [{ author: null, brand: "Anker", store_name: "Anker" }],
   );
+});
+
+test("CatalogDb files a product under the leaf of its trail", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001", { breadcrumbs: BLENDERS }), []);
+
+    assertEquals(await categoryOf("B000000001"), BLENDERS.join(" > "));
+    assertEquals(await tree(), [
+      { name: "Home & Kitchen", parent: null },
+      { name: "Kitchen & Dining", parent: "Home & Kitchen" },
+      { name: "Small Appliances", parent: "Kitchen & Dining" },
+      { name: "Blenders", parent: "Small Appliances" },
+      { name: "Personal Size Blenders", parent: "Blenders" },
+    ]);
+  });
+});
+
+test("CatalogDb hangs two trails off the branch they share", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001", { breadcrumbs: BLENDERS }), []);
+    await db.save(
+      product("B000000002", {
+        breadcrumbs: ["Home & Kitchen", "Kitchen & Dining", "Cookware"],
+      }),
+      [],
+    );
+
+    assertEquals(
+      (await tree()).filter((node) => node.name === "Home & Kitchen").length,
+      1,
+    );
+    assertEquals(await under("Home & Kitchen > Kitchen & Dining"), [
+      "B000000001",
+      "B000000002",
+    ]);
+    assertEquals(await under("Home & Kitchen > Kitchen & Dining > Cookware"), [
+      "B000000002",
+    ]);
+  });
+});
+
+test("CatalogDb tells apart two categories that share a name", async () => {
+  await inDb(async (db) => {
+    await db.save(
+      product("B000000001", { breadcrumbs: ["Electronics", "Accessories"] }),
+      [],
+    );
+    await db.save(
+      product("B000000002", { breadcrumbs: ["Books", "Accessories"] }),
+      [],
+    );
+
+    assertEquals(await categoryOf("B000000001"), "Electronics > Accessories");
+    assertEquals(await categoryOf("B000000002"), "Books > Accessories");
+    assertEquals(await under("Electronics"), ["B000000001"]);
+  });
+});
+
+test("CatalogDb files a product that named no trail under nothing", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001", { breadcrumbs: [] }), []);
+
+    assertEquals(await categoryOf("B000000001"), null);
+    assertEquals(await tree(), []);
+  });
+});
+
+test("CatalogDb keeps a trail a rerun shortened", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001", { breadcrumbs: BLENDERS }), []);
+    await db.save(
+      product("B000000001", { breadcrumbs: ["Home & Kitchen", "Blenders"] }),
+      [],
+    );
+
+    assertEquals(await categoryOf("B000000001"), "Home & Kitchen > Blenders");
+    // The trail it left is a category still, whatever hangs under it now.
+    assertEquals(await under(BLENDERS.join(" > ")), []);
+  });
+});
+
+test("CatalogDb grows a tree from the trail a string held", async () => {
+  await truncate();
+  // A catalog as an earlier walk left it: the trail folded into one cell.
+  const legacy = await CatalogDb.open(TEST_DATABASE_URL);
+  await legacy.close();
+  await query("ALTER TABLE products DROP COLUMN IF EXISTS category_id");
+  await query("ALTER TABLE products ADD COLUMN IF NOT EXISTS breadcrumbs TEXT");
+  await query("DELETE FROM categories");
+  await query(
+    `INSERT INTO products (asin, url, department, captured_at, breadcrumbs)
+     VALUES ($1, '', 'home', now(), $2), ($3, '', 'home', now(), $4)`,
+    [
+      "B000000001",
+      BLENDERS.join(" > "),
+      "B000000002",
+      "Home & Kitchen > Kitchen & Dining > Cookware",
+    ],
+  );
+
+  const db = await CatalogDb.open(TEST_DATABASE_URL);
+  await db.close();
+
+  assertEquals(await categoryOf("B000000001"), BLENDERS.join(" > "));
+  assertEquals(await under("Home & Kitchen"), ["B000000001", "B000000002"]);
+  assertEquals((await columnsOf("products")).includes("breadcrumbs"), false);
 });
