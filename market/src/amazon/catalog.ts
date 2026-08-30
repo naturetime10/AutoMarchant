@@ -1,16 +1,15 @@
 import { Mutex } from "../concurrency.ts";
 import { CatalogDb } from "./catalog_db.ts";
-import { CsvExport } from "./csv_export.ts";
 import type { ImageStore } from "./image_store.ts";
 import type { Product } from "./product.ts";
 
 /**
- * Everything a walk writes: the database it is kept in, the preview images
- * saved beside it, and the CSV a spreadsheet opens. Saving a product does all
- * three, so the export never lags what the catalog holds.
+ * Everything a walk writes: the database it is kept in and the preview images
+ * saved beside it. Saving a product does both, so the images never lag what
+ * the catalog holds.
  *
- * One database connection and one set of CSV files serve however many tabs a
- * walk reads with, so writing to them is one product at a time.
+ * One database connection serves however many tabs a walk reads with, so
+ * writing to it is one product at a time.
  */
 export class Catalog {
   private readonly turns = new Mutex();
@@ -20,7 +19,6 @@ export class Catalog {
     readonly label: string,
     private readonly db: CatalogDb,
     private readonly images: ImageStore,
-    private readonly csv: CsvExport,
   ) {}
 
   static async open(
@@ -33,7 +31,6 @@ export class Catalog {
       withoutPassword(databaseUrl),
       await CatalogDb.open(databaseUrl),
       images,
-      await CsvExport.open(dir),
     );
   }
 
@@ -48,21 +45,11 @@ export class Catalog {
   /** The images come off the network first, before a turn is taken. */
   async save(product: Product): Promise<void> {
     const images = await this.images.save(product.asin, product.images);
-    await this.turns.run(async () => {
-      await this.db.save(product, images);
-      await this.csv.append(product, images);
-    });
+    await this.turns.run(() => this.db.save(product, images));
   }
 
-  /** Squares the CSV with the database, then closes it. */
   close(): Promise<void> {
-    return this.turns.run(async () => {
-      try {
-        await this.csv.rewrite(this.db);
-      } finally {
-        await this.db.close();
-      }
-    });
+    return this.turns.run(() => this.db.close());
   }
 }
 

@@ -13,5 +13,5 @@ artifacts_dir = "artifacts"
 # it, so lower it if Amazon starts serving captchas; --concurrency=N overrides
 # it for one run.
 concurrency = 5
-# Where a walk writes its images, CSV, and log. Recipes run inside market/.
+# Where a walk writes its images and log. Recipes run inside market/.
 output_dir = "../output/market/discover"

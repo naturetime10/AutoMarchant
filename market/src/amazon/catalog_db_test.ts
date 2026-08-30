@@ -212,14 +212,3 @@ test("CatalogDb declares the same columns the schema creates", async () => {
     }
   });
 });
-
-test("CatalogDb reads a table back in its declared column order", async () => {
-  await inDb(async (db) => {
-    await db.save(product("B000000001"), []);
-
-    const [row] = await db.rows("products");
-    assertEquals(row[TABLES.products.indexOf("asin")], "B000000001");
-    assertEquals(row[TABLES.products.indexOf("price")], 12.99);
-    assertEquals(row.length, TABLES.products.length);
-  });
-});

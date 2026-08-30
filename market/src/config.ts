@@ -19,7 +19,7 @@ export class Config {
   /** Where screenshots and HTML dumps of a failed run are written. */
   readonly artifactsDir: string;
   /**
-   * Where a discovery run writes its images, CSV, and log. Recipes run inside
+   * Where a discovery run writes its images and log. Recipes run inside
    * market/, so the default climbs to the repo-wide output tree.
    */
   readonly outputDir: string;

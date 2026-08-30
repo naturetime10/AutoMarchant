@@ -50,7 +50,6 @@ Everything lands in `output/market/discover/`:
 | | |
 | --- | --- |
 | `images/<asin>/` | The preview images, downloaded. One already on disk is left alone, so a rerun costs nothing for what it has. Cap them with `--images=N`, or pass `--images=0` to record the URLs without fetching. |
-| `*.csv` | The same catalog as CSV, one file per table, joined on `asin`. Rows are appended as each product is read, and the files are rewritten from the database when the walk ends, so they match it exactly. |
 | `discover.log` | The run's progress, timestamped and appended. |
 
 The catalog itself is in Postgres: a table per kind of row, each keyed back to
@@ -86,7 +85,7 @@ requests a single tab did. Five is the default; `concurrency` under
 `--concurrency=N` overrides that for a single walk. Lower it if Amazon starts
 serving captchas — a walk that trips its bot checks costs more than the wait
 it saved. The catalog behind the tabs takes them one at a time, so a product
-still lands whole, and its CSV row with it.
+still lands whole.
 
 Sign-in runs in a visible Chromium window by default — Amazon flags headless
 browsers; `headless` under `[browser]` in `market/config.toml` switches that.

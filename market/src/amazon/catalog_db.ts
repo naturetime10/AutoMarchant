@@ -99,10 +99,7 @@ const SCHEMA = `
   );
 `;
 
-/**
- * Every table and its columns, in order. The CSV export reads this too, so a
- * file and the table behind it never drift apart.
- */
+/** Every table and its columns, in order. */
 export const TABLES = {
   products: [
     "asin",
@@ -157,18 +154,6 @@ export const TABLES = {
 
 export type TableName = keyof typeof TABLES;
 
-/** What identifies a row, and so the order a table reads back in. */
-const KEYS: Record<TableName, readonly string[]> = {
-  products: ["asin"],
-  attributes: ["asin", "kind", "key"],
-  features: ["asin", "position"],
-  images: ["asin", "position"],
-  reviews: ["asin", "position"],
-  questions: ["asin", "position"],
-  styling_ideas: ["asin", "position"],
-  captures: ["asin", "captured_at"],
-};
-
 /** The tables a product owns, cleared before it is written again. */
 const OWNED: TableName[] = [
   "attributes",
@@ -216,15 +201,6 @@ export class CatalogDb {
       await this.client.queryArray("ROLLBACK");
       throw error;
     }
-  }
-
-  /** Every row of a table, in the column order the schema declares. */
-  async rows(table: TableName): Promise<unknown[][]> {
-    const { rows } = await this.client.queryArray(
-      `SELECT ${TABLES[table].join(", ")} FROM ${table}
-       ORDER BY ${KEYS[table].join(", ")}`,
-    );
-    return rows as unknown[][];
   }
 
   close(): Promise<void> {
