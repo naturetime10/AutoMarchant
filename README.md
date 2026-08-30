@@ -111,6 +111,16 @@ has already read stay out of the queue. `--pages=N` counts the pages a run
 lists, not the page it may reach, so a resumed walk gets as many of them as a
 fresh one.
 
+Amazon answers a walk that reads too quickly with a page of its own — its 503
+page, a "Continue shopping" gate, or the storefront itself under a 503 that
+nothing on the page gives away — and the walk waits it out and asks again,
+three times, each wait twice the last. One that outlasts them stops the run.
+A page Amazon would not serve says nothing about what is behind it, so a
+blocked department keeps its place and a blocked product keeps its tries, and
+the next walk picks up where this one was turned away; the page that would not
+come is written to `artifacts/`. Only Amazon re-serving the page before it —
+what it sends in place of a 404 — ends a department's listings.
+
 A product page that will not load is asked for again by the next walk, and by
 the one after that; a fourth leaves it alone, so a walk does not open the same
 delisted product ahead of everything else forever. `--restart` lists a

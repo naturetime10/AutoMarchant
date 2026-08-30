@@ -1,4 +1,4 @@
-import { assertEquals } from "@std/assert";
+import { assertEquals, assertRejects } from "@std/assert";
 import { Catalog } from "./catalog.ts";
 import { type Department, selectDepartments } from "./departments.ts";
 import {
@@ -7,6 +7,7 @@ import {
   type Reader,
   Walk,
 } from "./discovery.ts";
+import { Blocked } from "./interstitial.ts";
 import { ImageStore } from "./image_store.ts";
 import { RunLog } from "../run_log.ts";
 import type { Product } from "./product.ts";
@@ -33,6 +34,8 @@ class Listings implements Pages, Reader {
     private readonly pages: Record<number, string[]>,
     /** The products whose page will not load, however often it is asked for. */
     private readonly missing: readonly string[] = [],
+    /** The products Amazon turns the walk away from rather than serving. */
+    private readonly blocked: readonly string[] = [],
   ) {}
 
   list(_department: Department, page: number): Promise<string[]> {
@@ -49,6 +52,9 @@ class Listings implements Pages, Reader {
 
   read(asin: string, department: Department): Promise<Product | undefined> {
     this.readers.push(asin);
+    if (this.blocked.includes(asin)) {
+      return Promise.reject(new Blocked("Amazon refused the page"));
+    }
     if (this.missing.includes(asin)) return Promise.resolve(undefined);
     return Promise.resolve({
       asin,
@@ -212,14 +218,59 @@ test("a walk to the end of the listings forgets where it was", async () => {
   await truncate();
 
   await walking(
-    new Listings({ 1: ["B000000011"] }),
+    // Past the last page Amazon re-serves the one before it, which is how the
+    // listings end.
+    new Listings({ 1: ["B000000011"], 2: ["B000000011"] }),
     [],
     async (listings, catalog) => {
-      // Page 2 ranks nothing, which is how the listings end.
       assertEquals(listings.opened, [1, 2]);
       // So the next walk starts at the top, where a listing puts what it has
       // newly ranked.
       assertEquals(await catalog.nextPage("electronics"), 1);
+    },
+  );
+});
+
+test("a listing page that ranks nothing leaves the walk where it was", async () => {
+  await truncate();
+
+  await walking(
+    // Page 2 comes back with nothing on it. That is not the end of the
+    // listings — the end re-serves the page before it — but a page Amazon
+    // would not draw.
+    new Listings({ 1: ["B000000011"] }),
+    [],
+    async (listings, catalog) => {
+      assertEquals(listings.opened, [1, 2]);
+      // So the place is kept: the next walk asks for page 2 again rather than
+      // taking the department for one that has been read to the end.
+      assertEquals(await catalog.nextPage("electronics"), 2);
+    },
+  );
+});
+
+test("a walk stops on a block rather than holding it against the product", async () => {
+  await truncate();
+  const pages = { 1: ["B000000011", "B000000012"] };
+
+  await assertRejects(
+    () =>
+      walking(
+        new Listings(pages, [], ["B000000011"]),
+        [],
+        () => Promise.resolve(),
+      ),
+    Blocked,
+  );
+
+  // A page Amazon refused says nothing about the product behind it, so the
+  // product keeps its place in the queue and the next walk asks again.
+  await walking(
+    new Listings(pages),
+    [],
+    async (listings, catalog) => {
+      assertEquals(listings.readers, ["B000000011", "B000000012"]);
+      assertEquals(await catalog.count("electronics"), 2);
     },
   );
 });

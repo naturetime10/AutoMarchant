@@ -8,7 +8,7 @@ import {
   selectDepartments,
 } from "./departments.ts";
 import { ImageStore } from "./image_store.ts";
-import { BLOCK_REASON, Interstitial } from "./interstitial.ts";
+import { BLOCK_REASON, Blocked, Interstitial } from "./interstitial.ts";
 import type { Product } from "./product.ts";
 import { ProductPage } from "./product_page.ts";
 import { SearchResultsPage } from "./search_results_page.ts";
@@ -233,9 +233,17 @@ export class Walk {
 
     for (let page = first; page <= last && !budget.spent; page++) {
       const asins = await this.pages.list(department, page);
+      if (asins.length === 0) {
+        // Not the end of the listings — the end re-serves the page before it
+        // — but a page that ranked nothing because it never drew. The place
+        // is kept, so the next walk asks for this page rather than taking the
+        // department for one that has been read to the end.
+        await this.log.error(`  page ${page}: nothing ranked; stopping here`);
+        return;
+      }
       // Past the last page Amazon re-serves the previous one rather than 404.
       const signature = asins.join(",");
-      if (asins.length === 0 || signature === previous) {
+      if (signature === previous) {
         // The listings are listed out: the next walk starts at the top, where
         // what has newly been ranked appears.
         await this.catalog.forgetPlace(department.slug);
@@ -420,6 +428,9 @@ class Tab implements Reader {
       await this.page.waitForTimeout(this.settings.pauseMs);
       return product;
     } catch (error) {
+      // A page Amazon refused says nothing about the product behind it, so
+      // the walk stops on it rather than spending one of the product's tries.
+      if (error instanceof Blocked) throw error;
       await this.log.error(
         `    ${asin}  skipped: ${
           error instanceof Error ? error.message : error
@@ -441,11 +452,11 @@ class Tab implements Reader {
    * department.
    */
   private async visit(url: string): Promise<void> {
-    await this.page.goto(url, { waitUntil: "domcontentloaded" });
+    let answer = await this.page.goto(url, { waitUntil: "domcontentloaded" });
 
     let backoffMs = FIRST_BACKOFF_MS;
     for (let retry = 1; retry <= MAX_RETRIES; retry++) {
-      const block = await this.gate.block();
+      const block = await this.gate.block(answer?.status());
       if (block === "none") return;
 
       await this.log.error(
@@ -455,15 +466,17 @@ class Tab implements Reader {
       await this.gate.dismiss(block);
       await this.page.waitForTimeout(backoffMs);
       backoffMs *= 2;
-      await this.page.goto(url, { waitUntil: "domcontentloaded" });
+      answer = await this.page.goto(url, { waitUntil: "domcontentloaded" });
     }
 
-    const block = await this.gate.block();
+    const block = await this.gate.block(answer?.status());
     if (block !== "none") {
       // The tabs are closed as the walk unwinds, so what Amazon served is
       // recorded here, while the page that would not come is still open.
       await this.diagnostics.save(this.page);
-      throw new Error(`${BLOCK_REASON[block]} for ${url}, and kept serving it`);
+      throw new Blocked(
+        `${BLOCK_REASON[block]} for ${url}, ${MAX_RETRIES + 1} times over`,
+      );
     }
   }
 }
