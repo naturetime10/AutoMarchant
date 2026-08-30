@@ -13,6 +13,7 @@ Deno.test("the built-in settings stand when there is no config.toml", async () =
 
   assertEquals(config.headless, false);
   assertEquals(config.userDataDir, ".playwright/amazon");
+  assertEquals(config.walkDataDir, ".playwright/walk");
   assertEquals(config.artifactsDir, "artifacts");
   assertEquals(config.outputDir, "../output/market/discover");
   assertEquals(config.concurrency, 5);
@@ -24,6 +25,7 @@ Deno.test("config.toml settles how the browser runs and what a walk does", async
     [browser]
     headless = true
     user_data_dir = "/tmp/profile"
+    walk_data_dir = "/tmp/walk"
     artifacts_dir = "/tmp/artifacts"
 
     [discover]
@@ -34,6 +36,7 @@ Deno.test("config.toml settles how the browser runs and what a walk does", async
 
   assertEquals(config.headless, true);
   assertEquals(config.userDataDir, "/tmp/profile");
+  assertEquals(config.walkDataDir, "/tmp/walk");
   assertEquals(config.artifactsDir, "/tmp/artifacts");
   assertEquals(config.outputDir, "/tmp/catalog");
   assertEquals(config.concurrency, 6);

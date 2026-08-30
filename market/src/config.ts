@@ -16,6 +16,12 @@ export class Config {
   readonly headless: boolean;
   /** Chromium profile directory; keeps the Amazon session between runs. */
   readonly userDataDir: string;
+  /**
+   * The profile a walk reads in, kept apart from the one that holds the
+   * account: Amazon throttles the account that reads too much of its
+   * storefront, and a walk reads pages that need no account at all.
+   */
+  readonly walkDataDir: string;
   /** Where screenshots and HTML dumps of a failed run are written. */
   readonly artifactsDir: string;
   /**
@@ -32,6 +38,7 @@ export class Config {
 
     this.headless = browser.flag("headless", false);
     this.userDataDir = browser.text("user_data_dir", ".playwright/amazon");
+    this.walkDataDir = browser.text("walk_data_dir", ".playwright/walk");
     this.artifactsDir = browser.text("artifacts_dir", "artifacts");
     this.outputDir = discover.text("output_dir", "../output/market/discover");
     this.concurrency = discover.count("concurrency", 5);
