@@ -80,7 +80,11 @@ class Listings implements Pages, Reader {
 const walking = async (
   listings: Listings,
   options: string[],
-  body: (listings: Listings, catalog: Catalog) => Promise<void>,
+  body: (
+    listings: Listings,
+    catalog: Catalog,
+    said: readonly string[],
+  ) => Promise<void>,
 ) => {
   const dir = await Deno.makeTempDir();
   const catalog = await Catalog.open(
@@ -88,11 +92,12 @@ const walking = async (
     TEST_DATABASE_URL,
     new ImageStore(dir),
   );
-  const log = await RunLog.open(dir, "discover.log", () => {});
+  const said: string[] = [];
+  const log = await RunLog.open(dir, "discover.log", (line) => said.push(line));
   try {
     const settings = DiscoverySettings.parse(options, DEFAULTS);
     await new Walk(settings, listings, catalog, log).of(ELECTRONICS);
-    await body(listings, catalog);
+    await body(listings, catalog, said);
   } finally {
     await catalog.close();
     await Deno.remove(dir, { recursive: true });
@@ -330,6 +335,34 @@ test("a refresh reads the pages it lists, not the queue", async () => {
     ["--refresh", "--pages=1"],
     (listings) => {
       assertEquals(listings.readers, ["B000000011", "B000000012"]);
+      return Promise.resolve();
+    },
+  );
+});
+
+test("only a queue an earlier walk left behind is reported as one", async () => {
+  await truncate();
+  const pages = { 1: ["B000000011", "B000000012"] };
+
+  // The first walk queues page 1 itself, so nothing was left for it.
+  await walking(
+    new Listings(pages),
+    ["--pages=1", "--products=1"],
+    (_listings, _catalog, said) => {
+      assertEquals(said.filter((line) => line.includes("earlier walk")), []);
+      return Promise.resolve();
+    },
+  );
+
+  // The product it had no budget for is what the next walk picks up.
+  await walking(
+    new Listings(pages),
+    ["--pages=1"],
+    (_listings, _catalog, said) => {
+      assertEquals(
+        said.filter((line) => line.includes("earlier walk")),
+        ["  1 queued by an earlier walk"],
+      );
       return Promise.resolve();
     },
   );

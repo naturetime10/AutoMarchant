@@ -155,6 +155,16 @@ still lands whole.
 
 Sign-in runs in a visible Chromium window by default — Amazon flags headless
 browsers; `headless` under `[browser]` in `market/config.toml` switches that.
-The session is kept in a persistent profile (`market/.playwright/`), so later
-runs normally skip the login form. Set `AMAZON_TOTP_SECRET` to answer
+The session is kept in a persistent profile (`market/.playwright/amazon`), so
+later runs normally skip the login form. Set `AMAZON_TOTP_SECRET` to answer
 2FA automatically; otherwise the code is prompted for on the terminal.
+
+A walk does not use that profile, and does not sign in. A listing page and a
+product page are pages any visitor may read, and Amazon throttles the account
+that reads too many of them: signed in, every listing came back as the 503
+page in a tenth of a second — no wait to sit out, no page behind it — while
+product pages went on serving, and the refusal followed the account's cookies
+rather than the machine or the address. So `discover` reads in a profile of
+its own (`market/.playwright/walk`, `walk_data_dir` under `[browser]`), which
+the account's cookies never reach. Signing in stays a command of its own for
+the pages that do need an account.

@@ -207,6 +207,9 @@ export class Walk {
     // the queue, so it covers the pages it was asked for.
     if (!this.settings.refresh) {
       const queued = await this.catalog.unread(department.slug);
+      if (queued.length > 0) {
+        await this.log.info(`  ${queued.length} queued by an earlier walk`);
+      }
       await this.read(department, budget, tried, queued);
     }
     await this.list(department, budget, tried);
@@ -273,11 +276,6 @@ export class Walk {
   ): Promise<void> {
     const queued = due.filter((asin) => !tried.has(asin));
     if (queued.length === 0) return;
-    // What a walk reads before it has listed anything is what an earlier walk
-    // left behind; the rest is the page just listed, which said its own size.
-    if (tried.size === 0) {
-      await this.log.info(`  ${queued.length} queued by an earlier walk`);
-    }
 
     // The queue is read across every tab at once; a place is claimed before a
     // page is opened, so the cap holds however many tabs are reading, and
