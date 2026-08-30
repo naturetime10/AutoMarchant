@@ -1,7 +1,7 @@
 import { Client, type ClientOptions, Oid } from "@db/postgres";
 import type { StoredImage } from "./image_store.ts";
 import { parseDate } from "./parse.ts";
-import { type Product, readByline } from "./product.ts";
+import { type Category, type Product, readByline } from "./product.ts";
 
 /**
  * A product has a shape of its own: many reviews, many detail rows, many
@@ -19,6 +19,15 @@ const SCHEMA = `
     parent_id INTEGER REFERENCES categories (id) ON DELETE CASCADE,
     name TEXT NOT NULL
   );
+  -- Amazon's own id for the category, where the link it was read from named
+  -- one. It is the surer identity of the two: the same category is written
+  -- differently in different places — "Breeds" at the end of a trail, "Cat
+  -- Breeds (Books)" in a rank — and the node is what says they are one. A
+  -- catalog written before the node was read has none, and picks them up as
+  -- its products are read again.
+  ALTER TABLE categories ADD COLUMN IF NOT EXISTS node TEXT;
+  CREATE UNIQUE INDEX IF NOT EXISTS categories_node
+    ON categories (node) WHERE node IS NOT NULL;
   -- A name is unique among its siblings, and the roots are siblings of one
   -- another: NULLS NOT DISTINCT is what makes a second "Home & Kitchen" at the
   -- top collide with the first rather than sit beside it. It indexes
@@ -54,12 +63,21 @@ const SCHEMA = `
   -- Books were walked before their byline was understood, so a catalog that
   -- predates the column is given it here rather than being started again.
   ALTER TABLE products ADD COLUMN IF NOT EXISTS author TEXT;
-  -- Likewise a catalog whose trails are still folded into a cell; the cell is
-  -- read into the tree, and then dropped, by adoptBreadcrumbTrees.
-  ALTER TABLE products ADD COLUMN IF NOT EXISTS category_id INTEGER
-    REFERENCES categories (id) ON DELETE SET NULL;
   CREATE INDEX IF NOT EXISTS products_department ON products (department);
-  CREATE INDEX IF NOT EXISTS products_category ON products (category_id);
+
+  -- A product sits in more than one category: its trail draws one, and its
+  -- Best Sellers Rank names the others — sometimes the trail's own leaf under
+  -- another name, sometimes a category the trail never passes through. So the
+  -- categories a product is filed under are a table rather than a column, and
+  -- the column an earlier catalog kept is folded into it by adoptCategoryColumn.
+  CREATE TABLE IF NOT EXISTS product_categories (
+    asin TEXT NOT NULL REFERENCES products (asin) ON DELETE CASCADE,
+    category_id INTEGER NOT NULL REFERENCES categories (id) ON DELETE CASCADE,
+    PRIMARY KEY (asin, category_id)
+  );
+  -- Everything under a category is a walk down the tree and then this index.
+  CREATE INDEX IF NOT EXISTS product_categories_category
+    ON product_categories (category_id);
 
   CREATE TABLE IF NOT EXISTS attributes (
     asin TEXT NOT NULL REFERENCES products (asin) ON DELETE CASCADE,
@@ -154,7 +172,8 @@ const SCHEMA = `
 
 /** Every table and its columns, in order. */
 export const TABLES = {
-  categories: ["id", "parent_id", "name"],
+  categories: ["id", "parent_id", "name", "node"],
+  product_categories: ["asin", "category_id"],
   products: [
     "asin",
     "url",
@@ -178,7 +197,6 @@ export const TABLES = {
     "description",
     "aplus",
     "author",
-    "category_id",
   ],
   attributes: ["asin", "kind", "key", "value"],
   features: ["asin", "position", "feature"],
@@ -236,6 +254,7 @@ export class CatalogDb {
     await client.queryArray(SCHEMA);
     const db = new CatalogDb(client);
     await db.adoptBreadcrumbTrees();
+    await db.adoptCategoryColumn();
     await db.adoptBookAuthors();
     await db.adoptReviewDates();
     return db;
@@ -255,10 +274,11 @@ export class CatalogDb {
     );
 
     for (const [asin, trail] of rows) {
-      await this.client.queryArray(
-        "UPDATE products SET category_id = $1 WHERE asin = $2",
-        [await this.categoryFor(trail.split(" > ")), asin],
-      );
+      let parent: number | null = null;
+      for (const name of trail.split(" > ").filter((name) => name !== "")) {
+        parent = await this.place(parent, { name });
+      }
+      if (parent !== null) await this.file(asin, [parent]);
     }
 
     await this.client.queryArray(
@@ -266,39 +286,102 @@ export class CatalogDb {
     );
   }
 
-  private async hasBreadcrumbs(): Promise<boolean> {
+  /**
+   * A product used to be filed under one category, in a column of its own.
+   * It sits in several — its trail draws one and its rank names the rest — so
+   * the column is read into `product_categories` here and then dropped; the
+   * category it held is kept, as the first of however many the next read of
+   * the product finds.
+   */
+  private async adoptCategoryColumn(): Promise<void> {
+    if (!await this.hasColumn("products", "category_id")) return;
+
+    await this.client.queryArray(
+      `INSERT INTO product_categories (asin, category_id)
+       SELECT asin, category_id FROM products WHERE category_id IS NOT NULL
+       ON CONFLICT DO NOTHING`,
+    );
+    await this.client.queryArray(
+      "ALTER TABLE products DROP COLUMN category_id",
+    );
+  }
+
+  private hasBreadcrumbs(): Promise<boolean> {
+    return this.hasColumn("products", "breadcrumbs");
+  }
+
+  private async hasColumn(table: string, column: string): Promise<boolean> {
     const { rows } = await this.client.queryArray<[boolean]>(
       `SELECT count(*) > 0 FROM information_schema.columns
-       WHERE table_schema = 'public' AND table_name = 'products'
-         AND column_name = 'breadcrumbs'`,
+       WHERE table_schema = 'public' AND table_name = $1
+         AND column_name = $2`,
+      [table, column],
     );
     return rows[0][0];
   }
 
   /**
-   * The trail as a chain of rows, made where it does not reach yet, answered
-   * with the leaf a product is filed under. A branch two trails share resolves
-   * to the row that is already there, which is what keeps the tree a tree.
+   * Every category a product is filed under: the leaf of the trail Amazon
+   * draws, and each category its rank names besides. A branch two trails
+   * share resolves to the row that is already there, which is what keeps the
+   * tree a tree.
    */
-  private async categoryFor(trail: string[]): Promise<number | null> {
+  private async categoriesFor(product: Product): Promise<number[]> {
     let parent: number | null = null;
-
-    for (const name of trail.filter((name) => name !== "")) {
-      parent = await this.node(parent, name);
+    for (const category of product.breadcrumbs) {
+      parent = await this.place(parent, category);
     }
 
-    return parent;
+    const filed = parent === null ? [] : [parent];
+    for (const category of product.ranked) {
+      // A rank names a category without saying where it hangs, so it goes in
+      // as a node on its own until a trail passes through it. Where the node
+      // is one the trail just walked, that is the row this finds — the
+      // product is in the one category, however Amazon wrote it there.
+      const id = await this.place(null, category);
+      if (!filed.includes(id)) filed.push(id);
+    }
+    return filed;
   }
 
-  /** One level of a trail: the row that is there, or the row it becomes. */
-  private async node(parent: number | null, name: string): Promise<number> {
-    // The upsert has to update something for RETURNING to answer with a row
-    // that was already there, so it writes back the name it just read.
+  /**
+   * One category: the row that is there, or the row it becomes. The browse
+   * node is the identity where the link named one, so a category met first in
+   * a rank and later in a trail is the one row — and the trail is what tells
+   * it where it hangs.
+   */
+  private async place(
+    parent: number | null,
+    category: Category,
+  ): Promise<number> {
+    if (category.node) {
+      const { rows } = await this.client.queryArray<[number, number | null]>(
+        "SELECT id, parent_id FROM categories WHERE node = $1",
+        [category.node],
+      );
+      if (rows.length > 0) {
+        const [id, hangsFrom] = rows[0];
+        // A category first met in a rank hangs from nothing; a trail passing
+        // through it now says where it belongs, and what it is called there.
+        if (parent !== null && hangsFrom === null) {
+          await this.client.queryArray(
+            "UPDATE categories SET parent_id = $1, name = $2 WHERE id = $3",
+            [parent, category.name, id],
+          );
+        }
+        return id;
+      }
+    }
+
+    // Not known by node, so the name among its siblings is what is left to go
+    // on. The upsert has to update something for RETURNING to answer with a
+    // row that was already there, so it writes back the node it now knows.
     const { rows } = await this.client.queryArray<[number]>(
-      `INSERT INTO categories (parent_id, name) VALUES ($1, $2)
-       ON CONFLICT (parent_id, name) DO UPDATE SET name = excluded.name
+      `INSERT INTO categories (parent_id, name, node) VALUES ($1, $2, $3)
+       ON CONFLICT (parent_id, name) DO UPDATE
+         SET node = COALESCE(categories.node, excluded.node)
        RETURNING id`,
-      [parent, name],
+      [parent, category.name, category.node ?? null],
     );
     return rows[0][0];
   }
@@ -479,7 +562,7 @@ export class CatalogDb {
 
   private async write(product: Product, images: StoredImage[]): Promise<void> {
     const asin = product.asin;
-    const category = await this.categoryFor(product.breadcrumbs);
+    const categories = await this.categoriesFor(product);
 
     await this.client.queryArray(
       `INSERT INTO products (${TABLES.products.join(", ")})
@@ -488,7 +571,7 @@ export class CatalogDb {
         TABLES.products.filter((column) => column !== "asin")
           .map((column) => `${column} = excluded.${column}`).join(", ")
       }`,
-      productRow(product, category),
+      productRow(product),
     );
 
     for (const table of OWNED) {
@@ -496,6 +579,8 @@ export class CatalogDb {
         asin,
       ]);
     }
+
+    await this.file(asin, categories);
 
     await this.insert(
       "attributes",
@@ -564,6 +649,18 @@ export class CatalogDb {
     );
   }
 
+  /** Files a product under the categories given, and under those alone. */
+  private async file(asin: string, categories: number[]): Promise<void> {
+    await this.client.queryArray(
+      "DELETE FROM product_categories WHERE asin = $1",
+      [asin],
+    );
+    await this.insert(
+      "product_categories",
+      categories.map((category) => [asin, category]),
+    );
+  }
+
   /** One statement per table, however many rows it carries. */
   private async insert(table: TableName, rows: unknown[][]): Promise<void> {
     if (rows.length === 0) return;
@@ -596,7 +693,7 @@ export function connection(databaseUrl: string): ClientOptions {
   };
 }
 
-function productRow(product: Product, category: number | null): unknown[] {
+function productRow(product: Product): unknown[] {
   return [
     product.asin,
     product.url,
@@ -620,7 +717,6 @@ function productRow(product: Product, category: number | null): unknown[] {
     product.description ?? null,
     product.aplus ?? null,
     product.author ?? null,
-    category,
   ];
 }
 
