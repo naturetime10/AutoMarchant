@@ -1,0 +1,21 @@
+# One-time Chromium download for Playwright.
+install:
+    deno run -A npm:playwright@^1.62.1 install chromium
+
+# Sign in to Amazon; the session is kept in the browser profile.
+login:
+    deno run -A --env-file=.env main.ts
+
+# Unit tests.
+test:
+    deno test --allow-env
+
+# Formatting, lint, and type check.
+check:
+    deno fmt --check
+    deno lint
+    deno check main.ts main_test.ts
+
+# Apply formatting.
+fmt:
+    deno fmt
