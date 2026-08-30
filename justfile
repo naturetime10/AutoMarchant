@@ -15,3 +15,7 @@ check: market::check
 
 # Apply formatting across subprojects.
 fmt: market::fmt
+
+# Prepare an isolated worktree so a branch can be worked on alongside the others.
+tree branch *base:
+    @./scripts/worktree.sh {{ branch }} {{ base }}
