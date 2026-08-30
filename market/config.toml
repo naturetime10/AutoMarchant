@@ -10,7 +10,8 @@ artifacts_dir = "artifacts"
 
 [discover]
 # Product pages read at once, a browser tab each. The request rate rises with
-# it, so raise it a little at a time; --concurrency=N overrides it for one run.
-concurrency = 1
+# it, so lower it if Amazon starts serving captchas; --concurrency=N overrides
+# it for one run.
+concurrency = 16
 # Where a walk writes its images, CSV, and log. Recipes run inside market/.
 output_dir = "../output/market/discover"

@@ -26,7 +26,7 @@ export interface DiscoveryOptions {
   refresh?: boolean;
   /** Breathing room between product pages, so the walk stays polite. */
   pauseMs?: number;
-  /** Product pages read at once, a tab each; one at a time by default. */
+  /** Product pages read at once, a tab each; sixteen of them by default. */
   concurrency?: number;
 }
 
@@ -52,7 +52,7 @@ export class DiscoverySettings {
     this.imageLimit = options.imageLimit ?? Number.POSITIVE_INFINITY;
     this.refresh = options.refresh ?? false;
     this.pauseMs = options.pauseMs ?? 1200;
-    this.concurrency = options.concurrency ?? 1;
+    this.concurrency = options.concurrency ?? 16;
   }
 
   /** Reads the flags `main.ts discover` was given, over what .env set. */
