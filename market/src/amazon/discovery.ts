@@ -1,10 +1,11 @@
 import type { Page } from "playwright";
-import { CatalogStore } from "./catalog_store.ts";
+import { Catalog } from "./catalog.ts";
 import {
   type Department,
   DEPARTMENTS,
   selectDepartments,
 } from "./departments.ts";
+import { ImageStore } from "./image_store.ts";
 import { ProductPage } from "./product_page.ts";
 import { SearchResultsPage } from "./search_results_page.ts";
 import type { RunLog } from "../run_log.ts";
@@ -16,6 +17,10 @@ export interface DiscoveryOptions {
   maxPages?: number;
   maxProducts?: number;
   outputDir?: string;
+  /** Preview images to download per product; none when 0. */
+  imageLimit?: number;
+  /** Read products already in the catalog again, rather than skipping them. */
+  refresh?: boolean;
   /** Breathing room between product pages, so the walk stays polite. */
   pauseMs?: number;
 }
@@ -26,6 +31,8 @@ export class DiscoverySettings {
   readonly maxPages: number;
   readonly maxProducts: number;
   readonly outputDir: string;
+  readonly imageLimit: number;
+  readonly refresh: boolean;
   readonly pauseMs: number;
 
   constructor(options: DiscoveryOptions = {}) {
@@ -33,6 +40,8 @@ export class DiscoverySettings {
     this.maxPages = options.maxPages ?? Number.POSITIVE_INFINITY;
     this.maxProducts = options.maxProducts ?? Number.POSITIVE_INFINITY;
     this.outputDir = options.outputDir ?? "../output/market/discover";
+    this.imageLimit = options.imageLimit ?? Number.POSITIVE_INFINITY;
+    this.refresh = options.refresh ?? false;
     this.pauseMs = options.pauseMs ?? 1200;
   }
 
@@ -58,13 +67,19 @@ export class DiscoverySettings {
         case "--out":
           options.outputDir = value;
           break;
+        case "--images":
+          options.imageLimit = wholeNumber(flag, value, 0);
+          break;
+        case "--refresh":
+          options.refresh = true;
+          break;
         case "--pause":
           options.pauseMs = wholeNumber(flag, value, 0);
           break;
         default:
           throw new Error(
             `Unknown discover option: ${arg}. Try --departments, --pages, ` +
-              "--products, --out, or --pause.",
+              "--products, --out, --images, --refresh, or --pause.",
           );
       }
     }
@@ -91,17 +106,21 @@ export class Discovery {
   }
 
   async run(): Promise<void> {
-    for (const department of this.settings.departments) {
-      await this.walk(department);
+    const catalog = await Catalog.open(
+      this.settings.outputDir,
+      ImageStore.into(this.settings.outputDir, this.settings.imageLimit),
+    );
+    try {
+      for (const department of this.settings.departments) {
+        await this.walk(department, catalog);
+      }
+    } finally {
+      await catalog.close();
     }
   }
 
-  private async walk(department: Department): Promise<void> {
-    const store = await CatalogStore.open(
-      this.settings.outputDir,
-      department.slug,
-    );
-    await this.log.info(`${department.name} -> ${store.csvPath}`);
+  private async walk(department: Department, catalog: Catalog): Promise<void> {
+    await this.log.info(`${department.name} -> ${catalog.path}`);
 
     let captured = 0;
     let previous = "";
@@ -117,19 +136,22 @@ export class Discovery {
       await this.log.info(`  page ${page}: ${asins.length} products`);
       for (const asin of asins) {
         if (captured >= this.settings.maxProducts) break pages;
-        if (store.has(asin)) continue;
+        // A refresh updates what is known and adds a capture to its history.
+        if (!this.settings.refresh && catalog.has(asin)) continue;
 
         const product = await this.capture(asin, department);
         if (!product) continue;
 
-        await store.append(product);
+        await catalog.save(product);
         captured++;
         await this.log.info(`    ${asin}  ${product.title ?? "(untitled)"}`);
       }
     }
 
     await this.log.info(
-      `  ${department.slug}: ${captured} new, ${store.size} in total`,
+      `  ${department.slug}: ${captured} new, ${
+        catalog.count(department.slug)
+      } in total`,
     );
   }
 

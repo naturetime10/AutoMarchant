@@ -11,6 +11,8 @@ Deno.test("settings walk every department and every page by default", () => {
   assertEquals(settings.maxPages, Number.POSITIVE_INFINITY);
   assertEquals(settings.maxProducts, Number.POSITIVE_INFINITY);
   assertEquals(settings.outputDir, OUTPUT);
+  assertEquals(settings.imageLimit, Number.POSITIVE_INFINITY);
+  assertEquals(settings.refresh, false);
 });
 
 Deno.test("settings narrow the walk to the flags given", () => {
@@ -31,6 +33,15 @@ Deno.test("settings narrow the walk to the flags given", () => {
   assertEquals(settings.maxPages, 2);
   assertEquals(settings.maxProducts, 10);
   assertEquals(settings.pauseMs, 0);
+});
+
+Deno.test("settings cap or switch off the images downloaded", () => {
+  assertEquals(DiscoverySettings.parse(["--images=3"], OUTPUT).imageLimit, 3);
+  assertEquals(DiscoverySettings.parse(["--images=0"], OUTPUT).imageLimit, 0);
+});
+
+Deno.test("settings read a known product again when asked to refresh", () => {
+  assertEquals(DiscoverySettings.parse(["--refresh"], OUTPUT).refresh, true);
 });
 
 Deno.test("settings take an output directory of their own", () => {

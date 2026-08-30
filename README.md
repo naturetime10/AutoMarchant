@@ -25,13 +25,33 @@ just market discover                 # walk every department, product by product
 product detail page it ranks — title, images, price, rating, store, details,
 style, measurements, styling ideas, questions, reviews, and description.
 
-Each department is written to `output/market/discover/`, a row appended to
-`<department>.csv` as each product is read, alongside a `<department>.jsonl`
-that keeps the nested fields whole and lets a rerun skip what an earlier run
-captured. The run's progress is appended to `discover.log` there too.
+Everything lands in `output/market/discover/`:
+
+| | |
+| --- | --- |
+| `catalog.db` | SQLite, the catalog itself. A product owns its reviews, details, images and questions, so a rerun updates a product instead of appending a second copy, and `captures` keeps a row per visit to trace a price or a rating over time. |
+| `images/<asin>/` | The preview images, downloaded. One already on disk is left alone, so a rerun costs nothing for what it has. Cap them with `--images=N`, or pass `--images=0` to record the URLs without fetching. |
+| `*.csv` | The same catalog as CSV, one file per table, joined on `asin`. Rows are appended as each product is read, and the files are rewritten from the database when the walk ends, so they match it exactly. |
+| `discover.log` | The run's progress, timestamped and appended. |
+
+A product's reviews and detail rows do not fit in a product's row, so each gets
+a row of its own rather than being folded into a cell as JSON. Ask the database
+questions directly when a spreadsheet is the wrong tool:
+
+```sh
+sqlite3 output/market/discover/catalog.db \
+  "SELECT title, price, rating_average FROM products
+   WHERE department = 'electronics' AND rating_count > 1000
+   ORDER BY rating_average DESC LIMIT 10"
+```
+
+A product already in the catalog is skipped, so a walk resumes where it left
+off. `--refresh` reads it again instead: the product is updated in place and a
+row is added to `captures`, which is how a price series accumulates.
 
 ```sh
 just market discover --departments=electronics,books --pages=2 --products=50
+just market discover --departments=electronics --refresh --images=0
 ```
 
 Sign-in runs in a visible Chromium window by default — Amazon flags headless
