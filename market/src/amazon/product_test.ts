@@ -131,7 +131,7 @@ Deno.test("toProduct unpacks a review into its parts", () => {
     title: "Great cable",
     author: "Sam",
     rating: 5,
-    date: "May 1, 2024",
+    date: "2024-05-01T00:00:00.000Z",
     verifiedPurchase: true,
     body: "Works well",
     helpfulVotes: 1,

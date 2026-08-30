@@ -1,5 +1,6 @@
 import { Client, type ClientOptions, Oid } from "@db/postgres";
 import type { StoredImage } from "./image_store.ts";
+import { parseDate } from "./parse.ts";
 import { type Product, readByline } from "./product.ts";
 
 /**
@@ -89,7 +90,7 @@ const SCHEMA = `
     title TEXT,
     author TEXT,
     rating DOUBLE PRECISION,
-    date TEXT,
+    date TIMESTAMPTZ,
     verified_purchase BOOLEAN NOT NULL,
     body TEXT,
     helpful_votes INTEGER,
@@ -202,6 +203,7 @@ export class CatalogDb {
     const db = new CatalogDb(client);
     await db.adoptBreadcrumbTrees();
     await db.adoptBookAuthors();
+    await db.adoptReviewDates();
     return db;
   }
 
@@ -290,6 +292,44 @@ export class CatalogDb {
         [author, asin],
       );
     }
+  }
+
+  /**
+   * A review's date used to be kept as the words the page dated it in, which
+   * left "reviews since June" a string match rather than a comparison. The
+   * words still name a day, so they are read the way a fresh walk reads them —
+   * one pass per wording, since a catalog holds far more reviews than days —
+   * and the column becomes the moments they meant.
+   */
+  private async adoptReviewDates(): Promise<void> {
+    if (!await this.hasWordedReviewDates()) return;
+
+    const { rows } = await this.client.queryArray<[string]>(
+      "SELECT DISTINCT date FROM reviews WHERE date IS NOT NULL",
+    );
+
+    for (const [words] of rows) {
+      await this.client.queryArray(
+        "UPDATE reviews SET date = $1 WHERE date = $2",
+        // A line that names no day is emptied: the cast below would otherwise
+        // refuse the whole column over it.
+        [parseDate(words) ?? null, words],
+      );
+    }
+
+    await this.client.queryArray(
+      `ALTER TABLE reviews ALTER COLUMN date TYPE TIMESTAMPTZ
+        USING date::timestamptz`,
+    );
+  }
+
+  private async hasWordedReviewDates(): Promise<boolean> {
+    const { rows } = await this.client.queryArray<[boolean]>(
+      `SELECT count(*) > 0 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'reviews'
+         AND column_name = 'date' AND data_type = 'text'`,
+    );
+    return rows[0][0];
   }
 
   async has(asin: string): Promise<boolean> {
