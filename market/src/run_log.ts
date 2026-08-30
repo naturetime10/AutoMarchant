@@ -1,8 +1,13 @@
+import { Mutex } from "./concurrency.ts";
+
 /**
  * A run's progress, on the terminal and in a log file. The file is appended
  * to, so the record of what a walk covered survives the runs after it.
  */
 export class RunLog {
+  /** One file, however many tabs are reporting into it. */
+  private readonly turns = new Mutex();
+
   private constructor(
     readonly path: string,
     private readonly echo: (line: string) => void,
@@ -28,12 +33,11 @@ export class RunLog {
   }
 
   /** The terminal gets the message; the file gets it stamped with the time. */
-  private async write(message: string): Promise<void> {
-    this.echo(message);
-    await Deno.writeTextFile(
-      this.path,
-      `${this.now().toISOString()} ${message}\n`,
-      { append: true },
-    );
+  private write(message: string): Promise<void> {
+    const line = `${this.now().toISOString()} ${message}\n`;
+    return this.turns.run(async () => {
+      this.echo(message);
+      await Deno.writeTextFile(this.path, line, { append: true });
+    });
   }
 }

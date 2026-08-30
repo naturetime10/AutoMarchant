@@ -21,6 +21,6 @@ fmt:
     deno fmt
 
 # Walk every department page by page, writing each product to output/market/discover.
-# Options: --departments=books,electronics --pages=N --products=N --images=N --out=DIR --pause=MS
+# Options: --departments=books,electronics --pages=N --products=N --images=N --out=DIR --pause=MS --tabs=N
 discover *options:
     deno run -A --env-file=.env main.ts discover {{ options }}

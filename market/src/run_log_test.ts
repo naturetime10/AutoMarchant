@@ -55,3 +55,21 @@ Deno.test("RunLog keeps what earlier runs logged", async () => {
     await Deno.remove(dir, { recursive: true });
   }
 });
+
+Deno.test("a log keeps a line per message when they arrive at once", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const log = await RunLog.open(dir, "discover.log", () => {});
+
+    await Promise.all(
+      Array.from({ length: 20 }, (_, index) => log.info(`line ${index}`)),
+    );
+
+    const lines = (await Deno.readTextFile(`${dir}/discover.log`)).trimEnd()
+      .split("\n");
+    assertEquals(lines.length, 20);
+    assertEquals(lines.every((line) => /^\S+ line \d+$/.test(line)), true);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

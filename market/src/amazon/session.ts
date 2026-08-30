@@ -82,7 +82,7 @@ export class AmazonSession {
   /** Walks each department's listings, recording every product found. */
   async discover(settings: DiscoverySettings): Promise<void> {
     const log = await RunLog.open(settings.outputDir);
-    await new Discovery(this.page, new AmazonUrls(), settings, log).run();
+    await new Discovery(this.context, new AmazonUrls(), settings, log).run();
   }
 
   /** Records what the failing page looked like, for after-the-fact debugging. */
