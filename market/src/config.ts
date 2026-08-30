@@ -10,10 +10,12 @@ export class Config {
   /** Where screenshots and HTML dumps of a failed run are written. */
   readonly artifactsDir: string;
   /**
-   * Where a discovery run writes its catalog and log. Recipes run inside
+   * Where a discovery run writes its images, CSV, and log. Recipes run inside
    * market/, so the default climbs to the repo-wide output tree.
    */
   readonly outputDir: string;
+  /** The Postgres database the catalog is kept in. */
+  readonly databaseUrl: string;
 
   constructor(env: Pick<Deno.Env, "get"> = Deno.env) {
     this.email = Config.require(env, "AMAZON_EMAIL");
@@ -22,6 +24,8 @@ export class Config {
     this.headless = env.get("HEADLESS") === "true";
     this.userDataDir = env.get("USER_DATA_DIR")?.trim() || ".playwright/amazon";
     this.artifactsDir = env.get("ARTIFACTS_DIR")?.trim() || "artifacts";
+    this.databaseUrl = env.get("DATABASE_URL")?.trim() ||
+      "postgresql://localhost:5432/automerchant";
     this.outputDir = env.get("OUTPUT_DIR")?.trim() ||
       "../output/market/discover";
   }

@@ -8,7 +8,7 @@ install:
 
 # Unit tests.
 test:
-    deno test --allow-env --allow-read --allow-write
+    deno test --allow-env --allow-read --allow-write --allow-net --env-file=.env
 
 # Formatting, lint, and type check.
 check:

@@ -17,6 +17,7 @@ export interface DiscoveryOptions {
   maxPages?: number;
   maxProducts?: number;
   outputDir?: string;
+  databaseUrl?: string;
   /** Preview images to download per product; none when 0. */
   imageLimit?: number;
   /** Read products already in the catalog again, rather than skipping them. */
@@ -31,6 +32,7 @@ export class DiscoverySettings {
   readonly maxPages: number;
   readonly maxProducts: number;
   readonly outputDir: string;
+  readonly databaseUrl: string;
   readonly imageLimit: number;
   readonly refresh: boolean;
   readonly pauseMs: number;
@@ -40,14 +42,19 @@ export class DiscoverySettings {
     this.maxPages = options.maxPages ?? Number.POSITIVE_INFINITY;
     this.maxProducts = options.maxProducts ?? Number.POSITIVE_INFINITY;
     this.outputDir = options.outputDir ?? "../output/market/discover";
+    this.databaseUrl = options.databaseUrl ??
+      "postgresql://localhost:5432/automerchant";
     this.imageLimit = options.imageLimit ?? Number.POSITIVE_INFINITY;
     this.refresh = options.refresh ?? false;
     this.pauseMs = options.pauseMs ?? 1200;
   }
 
   /** Reads the flags `main.ts discover` was given. */
-  static parse(args: string[], outputDir: string): DiscoverySettings {
-    const options: DiscoveryOptions = { outputDir };
+  static parse(
+    args: string[],
+    defaults: { outputDir: string; databaseUrl: string },
+  ): DiscoverySettings {
+    const options: DiscoveryOptions = { ...defaults };
 
     for (const arg of args) {
       const separator = arg.indexOf("=");
@@ -67,6 +74,9 @@ export class DiscoverySettings {
         case "--out":
           options.outputDir = value;
           break;
+        case "--database":
+          options.databaseUrl = value;
+          break;
         case "--images":
           options.imageLimit = wholeNumber(flag, value, 0);
           break;
@@ -79,7 +89,7 @@ export class DiscoverySettings {
         default:
           throw new Error(
             `Unknown discover option: ${arg}. Try --departments, --pages, ` +
-              "--products, --out, --images, --refresh, or --pause.",
+              "--products, --out, --database, --images, --refresh, or --pause.",
           );
       }
     }
@@ -108,6 +118,7 @@ export class Discovery {
   async run(): Promise<void> {
     const catalog = await Catalog.open(
       this.settings.outputDir,
+      this.settings.databaseUrl,
       ImageStore.into(this.settings.outputDir, this.settings.imageLimit),
     );
     try {
@@ -120,7 +131,7 @@ export class Discovery {
   }
 
   private async walk(department: Department, catalog: Catalog): Promise<void> {
-    await this.log.info(`${department.name} -> ${catalog.path}`);
+    await this.log.info(`${department.name} -> ${catalog.label}`);
 
     let captured = 0;
     let previous = "";
@@ -137,7 +148,7 @@ export class Discovery {
       for (const asin of asins) {
         if (captured >= this.settings.maxProducts) break pages;
         // A refresh updates what is known and adds a capture to its history.
-        if (!this.settings.refresh && catalog.has(asin)) continue;
+        if (!this.settings.refresh && await catalog.has(asin)) continue;
 
         const product = await this.capture(asin, department);
         if (!product) continue;
@@ -149,9 +160,9 @@ export class Discovery {
     }
 
     await this.log.info(
-      `  ${department.slug}: ${captured} new, ${
-        catalog.count(department.slug)
-      } in total`,
+      `  ${department.slug}: ${captured} new, ${await catalog.count(
+        department.slug,
+      )} in total`,
     );
   }
 

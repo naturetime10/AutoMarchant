@@ -114,7 +114,7 @@ export class CsvExport {
     for (const table of Object.keys(TABLES) as TableName[]) {
       await Deno.writeTextFile(
         `${this.dir}/${table}.csv`,
-        header(table) + db.rows(table).map(csvLine).join(""),
+        header(table) + (await db.rows(table)).map(csvLine).join(""),
       );
     }
   }

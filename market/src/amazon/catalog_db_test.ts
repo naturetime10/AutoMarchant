@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
-import { DatabaseSync } from "node:sqlite";
-import { CatalogDb, TABLES } from "./catalog_db.ts";
+import { Client } from "@db/postgres";
+import { CatalogDb, connection, TABLES } from "./catalog_db.ts";
+import { test, TEST_DATABASE_URL, truncate } from "./testing.ts";
 import type { Product } from "./product.ts";
 
 const product = (asin: string, over: Partial<Product> = {}): Product => ({
@@ -25,44 +26,56 @@ const product = (asin: string, over: Partial<Product> = {}): Product => ({
   ...over,
 });
 
-const inTempDb = async (
-  test: (db: CatalogDb, path: string) => void | Promise<void>,
-) => {
-  const dir = await Deno.makeTempDir();
-  const path = `${dir}/catalog.db`;
-  const db = CatalogDb.open(path);
+/** A catalog on the test database, emptied before the test runs. */
+const inDb = async (body: (db: CatalogDb) => Promise<void>) => {
+  await truncate();
+  const db = await CatalogDb.open(TEST_DATABASE_URL);
   try {
-    await test(db, path);
+    await body(db);
   } finally {
-    db.close();
-    await Deno.remove(dir, { recursive: true });
+    await db.close();
   }
 };
 
-const count = (path: string, table: string, asin: string): number => {
-  const db = new DatabaseSync(path);
-  const row = db.prepare(`SELECT count(*) AS n FROM ${table} WHERE asin = ?`)
-    .get(asin) as { n: number };
-  db.close();
+/** Reads the database directly, to check what the catalog actually wrote. */
+const query = async <T>(sql: string, args: unknown[] = []): Promise<T[]> => {
+  const client = new Client(connection(TEST_DATABASE_URL));
+  await client.connect();
+  try {
+    const result = await client.queryObject<Record<string, unknown>>({
+      text: sql,
+      args,
+    });
+    return result.rows as T[];
+  } finally {
+    await client.end();
+  }
+};
+
+const count = async (table: string, asin: string): Promise<number> => {
+  const [row] = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM ${table} WHERE asin = $1`,
+    [asin],
+  );
   return row.n;
 };
 
-Deno.test("CatalogDb knows a product it has saved", async () => {
-  await inTempDb((db) => {
-    assertEquals(db.has("B000000001"), false);
-    db.save(product("B000000001"), []);
-    assertEquals(db.has("B000000001"), true);
+test("CatalogDb knows a product it has saved", async () => {
+  await inDb(async (db) => {
+    assertEquals(await db.has("B000000001"), false);
+    await db.save(product("B000000001"), []);
+    assertEquals(await db.has("B000000001"), true);
   });
 });
 
-Deno.test("CatalogDb stores the scalars a spreadsheet would total", async () => {
-  await inTempDb((db, path) => {
-    db.save(product("B000000001"), []);
+test("CatalogDb stores the scalars a spreadsheet would total", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
 
-    const raw = new DatabaseSync(path);
-    const row = raw.prepare("SELECT * FROM products WHERE asin = ?")
-      .get("B000000001") as Record<string, unknown>;
-    raw.close();
+    const [row] = await query<Record<string, unknown>>(
+      "SELECT * FROM products WHERE asin = $1",
+      ["B000000001"],
+    );
 
     assertEquals(row.title, "A cable");
     assertEquals(row.price, 12.99);
@@ -71,31 +84,32 @@ Deno.test("CatalogDb stores the scalars a spreadsheet would total", async () => 
     assertEquals(row.rating_count, 12);
     assertEquals(row.sold_by, "AnkerDirect");
     assertEquals(row.breadcrumbs, "Electronics > Cables");
+    assertEquals(
+      (row.captured_at as Date).toISOString(),
+      "2026-08-29T00:00:00.000Z",
+    );
   });
 });
 
-Deno.test("CatalogDb keeps each kind of attribute apart", async () => {
-  await inTempDb((db, path) => {
-    db.save(product("B000000001"), []);
+test("CatalogDb keeps each kind of attribute apart", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
 
-    const raw = new DatabaseSync(path);
-    const kinds = raw.prepare(
-      "SELECT kind, key, value FROM attributes WHERE asin = ? ORDER BY kind",
-    ).all("B000000001");
-    raw.close();
-
-    assertEquals(kinds, [
-      { kind: "detail", key: "Style", value: "Braided" },
-      { kind: "measurement", key: "Length", value: "6 ft" },
-      { kind: "variation", key: "Color", value: "Black" },
-    ]);
+    assertEquals(
+      await query("SELECT kind, key, value FROM attributes ORDER BY kind"),
+      [
+        { kind: "detail", key: "Style", value: "Braided" },
+        { kind: "measurement", key: "Length", value: "6 ft" },
+        { kind: "variation", key: "Color", value: "Black" },
+      ],
+    );
   });
 });
 
-Deno.test("CatalogDb replaces a product's rows rather than doubling them", async () => {
-  await inTempDb((db, path) => {
-    db.save(product("B000000001"), []);
-    db.save(
+test("CatalogDb replaces a product's rows rather than doubling them", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
+    await db.save(
       product("B000000001", {
         reviews: [
           { verifiedPurchase: false, title: "First" },
@@ -105,16 +119,16 @@ Deno.test("CatalogDb replaces a product's rows rather than doubling them", async
       [],
     );
 
-    assertEquals(count(path, "products", "B000000001"), 1);
-    assertEquals(count(path, "reviews", "B000000001"), 2);
-    assertEquals(count(path, "attributes", "B000000001"), 3);
+    assertEquals(await count("products", "B000000001"), 1);
+    assertEquals(await count("reviews", "B000000001"), 2);
+    assertEquals(await count("attributes", "B000000001"), 3);
   });
 });
 
-Deno.test("CatalogDb keeps one capture per visit, so a price can be traced", async () => {
-  await inTempDb((db, path) => {
-    db.save(product("B000000001"), []);
-    db.save(
+test("CatalogDb keeps one capture per visit, so a price can be traced", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
+    await db.save(
       product("B000000001", {
         capturedAt: "2026-09-05T00:00:00.000Z",
         price: { amount: 9.99, currency: "USD", text: "$9.99" },
@@ -122,19 +136,16 @@ Deno.test("CatalogDb keeps one capture per visit, so a price can be traced", asy
       [],
     );
 
-    const raw = new DatabaseSync(path);
-    const prices = raw.prepare(
-      "SELECT price FROM captures WHERE asin = ? ORDER BY captured_at",
-    ).all("B000000001");
-    raw.close();
-
-    assertEquals(prices, [{ price: 12.99 }, { price: 9.99 }]);
+    assertEquals(
+      await query("SELECT price FROM captures ORDER BY captured_at"),
+      [{ price: 12.99 }, { price: 9.99 }],
+    );
   });
 });
 
-Deno.test("CatalogDb records where an image was saved", async () => {
-  await inTempDb((db, path) => {
-    db.save(product("B000000001"), [
+test("CatalogDb records where an image was saved", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), [
       {
         url: "https://m.media-amazon.com/images/I/1.jpg",
         path: "images/B000000001/01.jpg",
@@ -142,66 +153,71 @@ Deno.test("CatalogDb records where an image was saved", async () => {
       { url: "https://m.media-amazon.com/images/I/2.jpg" },
     ]);
 
-    const raw = new DatabaseSync(path);
-    const images = raw.prepare(
-      "SELECT position, url, path FROM images WHERE asin = ? ORDER BY position",
-    ).all("B000000001");
-    raw.close();
-
-    assertEquals(images[0], {
-      position: 1,
-      url: "https://m.media-amazon.com/images/I/1.jpg",
-      path: "images/B000000001/01.jpg",
-    });
-    assertEquals((images[1] as { path: unknown }).path, null);
+    assertEquals(
+      await query("SELECT position, url, path FROM images ORDER BY position"),
+      [
+        {
+          position: 1,
+          url: "https://m.media-amazon.com/images/I/1.jpg",
+          path: "images/B000000001/01.jpg",
+        },
+        {
+          position: 2,
+          url: "https://m.media-amazon.com/images/I/2.jpg",
+          path: null,
+        },
+      ],
+    );
   });
 });
 
-Deno.test("CatalogDb counts what a department holds", async () => {
-  await inTempDb((db) => {
-    db.save(product("B000000001"), []);
-    db.save(product("B000000002"), []);
-    db.save(product("B000000003", { department: "books" }), []);
+test("CatalogDb counts what a department holds", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
+    await db.save(product("B000000002"), []);
+    await db.save(product("B000000003", { department: "books" }), []);
 
-    assertEquals(db.count("electronics"), 2);
-    assertEquals(db.count("books"), 1);
+    assertEquals(await db.count("electronics"), 2);
+    assertEquals(await db.count("books"), 1);
   });
 });
 
-Deno.test("CatalogDb finds what an earlier run saved", async () => {
-  const dir = await Deno.makeTempDir();
+test("CatalogDb finds what an earlier connection saved", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
+  });
+
+  const later = await CatalogDb.open(TEST_DATABASE_URL);
   try {
-    const first = CatalogDb.open(`${dir}/catalog.db`);
-    first.save(product("B000000001"), []);
-    first.close();
-
-    const second = CatalogDb.open(`${dir}/catalog.db`);
-    assertEquals(second.has("B000000001"), true);
-    second.close();
+    assertEquals(await later.has("B000000001"), true);
   } finally {
-    await Deno.remove(dir, { recursive: true });
+    await later.close();
   }
 });
 
-Deno.test("CatalogDb declares the same columns the schema creates", async () => {
-  await inTempDb((db, path) => {
-    db.save(product("B000000001"), []);
+test("CatalogDb declares the same columns the schema creates", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
 
-    const raw = new DatabaseSync(path);
     for (const [table, columns] of Object.entries(TABLES)) {
-      const actual = raw.prepare(`PRAGMA table_info(${table})`).all()
-        .map((column) => (column as { name: string }).name);
-      assertEquals(actual, [...columns], table);
+      const actual = await query<{ column_name: string }>(
+        // Scoped to public: information_schema has an "attributes" view of
+        // its own, whose columns would otherwise be mixed in.
+        `SELECT column_name FROM information_schema.columns
+         WHERE table_schema = 'public' AND table_name = $1
+         ORDER BY ordinal_position`,
+        [table],
+      );
+      assertEquals(actual.map((row) => row.column_name), [...columns], table);
     }
-    raw.close();
   });
 });
 
-Deno.test("CatalogDb reads a table back in its declared column order", async () => {
-  await inTempDb((db) => {
-    db.save(product("B000000001"), []);
+test("CatalogDb reads a table back in its declared column order", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
 
-    const [row] = db.rows("products");
+    const [row] = await db.rows("products");
     assertEquals(row[TABLES.products.indexOf("asin")], "B000000001");
     assertEquals(row[TABLES.products.indexOf("price")], 12.99);
     assertEquals(row.length, TABLES.products.length);

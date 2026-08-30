@@ -21,6 +21,18 @@ just market run                      # sign in
 just market discover                 # walk every department, product by product
 ```
 
+The catalog lives in Postgres. Create the role and databases once, and put the
+connection strings in `market/.env` as `DATABASE_URL` and `TEST_DATABASE_URL`:
+
+```sh
+psql -d postgres -c "CREATE ROLE automerchant LOGIN PASSWORD 'choose-one'"
+createdb -O automerchant automerchant
+createdb -O automerchant automerchant_test
+```
+
+`just test` writes real tables, so it needs `TEST_DATABASE_URL` to be
+reachable; the database tests are skipped, with a warning, when it is not.
+
 `discover` walks each department's listings page by page and reads every
 product detail page it ranks — title, images, price, rating, store, details,
 style, measurements, styling ideas, questions, reviews, and description.
@@ -29,17 +41,19 @@ Everything lands in `output/market/discover/`:
 
 | | |
 | --- | --- |
-| `catalog.db` | SQLite, the catalog itself. A product owns its reviews, details, images and questions, so a rerun updates a product instead of appending a second copy, and `captures` keeps a row per visit to trace a price or a rating over time. |
 | `images/<asin>/` | The preview images, downloaded. One already on disk is left alone, so a rerun costs nothing for what it has. Cap them with `--images=N`, or pass `--images=0` to record the URLs without fetching. |
 | `*.csv` | The same catalog as CSV, one file per table, joined on `asin`. Rows are appended as each product is read, and the files are rewritten from the database when the walk ends, so they match it exactly. |
 | `discover.log` | The run's progress, timestamped and appended. |
 
-A product's reviews and detail rows do not fit in a product's row, so each gets
-a row of its own rather than being folded into a cell as JSON. Ask the database
-questions directly when a spreadsheet is the wrong tool:
+The catalog itself is in Postgres: a table per kind of row, each keyed back to
+the ASIN. A product owns its reviews, details, images, and questions, so a
+rerun updates a product instead of appending a second copy of it, and
+`captures` keeps a row per visit to trace a price or a rating over time. A
+product's reviews and detail rows do not fit in a product's row, so each gets a
+row of its own rather than being folded into a cell as JSON.
 
 ```sh
-sqlite3 output/market/discover/catalog.db \
+psql "$DATABASE_URL" -c \
   "SELECT title, price, rating_average FROM products
    WHERE department = 'electronics' AND rating_count > 1000
    ORDER BY rating_average DESC LIMIT 10"

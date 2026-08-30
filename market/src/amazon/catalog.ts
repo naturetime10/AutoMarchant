@@ -10,34 +10,38 @@ import type { Product } from "./product.ts";
  */
 export class Catalog {
   private constructor(
-    readonly path: string,
+    /** The database this walk writes to, with any password left out. */
+    readonly label: string,
     private readonly db: CatalogDb,
     private readonly images: ImageStore,
     private readonly csv: CsvExport,
   ) {}
 
-  static async open(dir: string, images: ImageStore): Promise<Catalog> {
+  static async open(
+    dir: string,
+    databaseUrl: string,
+    images: ImageStore,
+  ): Promise<Catalog> {
     await Deno.mkdir(dir, { recursive: true });
-    const path = `${dir}/catalog.db`;
     return new Catalog(
-      path,
-      CatalogDb.open(path),
+      withoutPassword(databaseUrl),
+      await CatalogDb.open(databaseUrl),
       images,
       await CsvExport.open(dir),
     );
   }
 
-  has(asin: string): boolean {
+  has(asin: string): Promise<boolean> {
     return this.db.has(asin);
   }
 
-  count(department: string): number {
+  count(department: string): Promise<number> {
     return this.db.count(department);
   }
 
   async save(product: Product): Promise<void> {
     const images = await this.images.save(product.asin, product.images);
-    this.db.save(product, images);
+    await this.db.save(product, images);
     await this.csv.append(product, images);
   }
 
@@ -46,7 +50,15 @@ export class Catalog {
     try {
       await this.csv.rewrite(this.db);
     } finally {
-      this.db.close();
+      await this.db.close();
     }
   }
+}
+
+/** A connection string safe to print in a log. */
+function withoutPassword(databaseUrl: string): string {
+  const parsed = URL.parse(databaseUrl);
+  if (!parsed?.password) return databaseUrl;
+  parsed.password = "";
+  return parsed.href;
 }

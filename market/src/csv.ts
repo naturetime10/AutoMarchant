@@ -4,6 +4,10 @@ export function csvLine(values: unknown[]): string {
 }
 
 function cell(value: unknown): string {
-  const text = value === undefined || value === null ? "" : String(value);
+  const text = value === undefined || value === null
+    ? ""
+    : value instanceof Date
+    ? value.toISOString()
+    : String(value);
   return /[",\r\n]/.test(text) ? `"${text.replaceAll('"', '""')}"` : text;
 }

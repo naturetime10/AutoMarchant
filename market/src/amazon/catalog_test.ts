@@ -1,6 +1,7 @@
 import { assertEquals } from "@std/assert";
 import { Catalog } from "./catalog.ts";
 import { ImageStore } from "./image_store.ts";
+import { test, TEST_DATABASE_URL, truncate } from "./testing.ts";
 import type { Product } from "./product.ts";
 
 const product: Product = {
@@ -22,19 +23,20 @@ const product: Product = {
   reviews: [],
 };
 
-Deno.test("Catalog saves the product, its image, and its CSV row together", async () => {
+test("Catalog saves the product, its image, and its CSV row together", async () => {
+  await truncate();
   const dir = await Deno.makeTempDir();
   const images = new ImageStore(
     dir,
     () => Promise.resolve(new Uint8Array([1])),
   );
-  const catalog = await Catalog.open(dir, images);
+  const catalog = await Catalog.open(dir, TEST_DATABASE_URL, images);
   try {
-    assertEquals(catalog.has("B000000001"), false);
+    assertEquals(await catalog.has("B000000001"), false);
     await catalog.save(product);
 
-    assertEquals(catalog.has("B000000001"), true);
-    assertEquals(catalog.count("electronics"), 1);
+    assertEquals(await catalog.has("B000000001"), true);
+    assertEquals(await catalog.count("electronics"), 1);
     assertEquals((await Deno.stat(`${dir}/images/B000000001/01.jpg`)).size, 1);
 
     const rows = (await Deno.readTextFile(`${dir}/products.csv`)).trimEnd()
@@ -50,13 +52,14 @@ Deno.test("Catalog saves the product, its image, and its CSV row together", asyn
   }
 });
 
-Deno.test("Catalog leaves the CSV matching the catalog, not the visits", async () => {
+test("Catalog leaves the CSV matching the catalog, not the visits", async () => {
+  await truncate();
   const dir = await Deno.makeTempDir();
   const images = new ImageStore(
     dir,
     () => Promise.resolve(new Uint8Array([1])),
   );
-  const catalog = await Catalog.open(dir, images);
+  const catalog = await Catalog.open(dir, TEST_DATABASE_URL, images);
   try {
     await catalog.save(product);
     await catalog.save({ ...product, capturedAt: "2026-09-05T00:00:00.000Z" });

@@ -1,4 +1,4 @@
-import { DatabaseSync } from "node:sqlite";
+import { Client, type ClientOptions, Oid } from "@db/postgres";
 import type { StoredImage } from "./image_store.ts";
 import type { Product } from "./product.ts";
 
@@ -13,14 +13,14 @@ const SCHEMA = `
     asin TEXT PRIMARY KEY,
     url TEXT NOT NULL,
     department TEXT NOT NULL,
-    captured_at TEXT NOT NULL,
+    captured_at TIMESTAMPTZ NOT NULL,
     title TEXT,
     brand TEXT,
     breadcrumbs TEXT,
-    price REAL,
-    list_price REAL,
+    price DOUBLE PRECISION,
+    list_price DOUBLE PRECISION,
     currency TEXT,
-    rating_average REAL,
+    rating_average DOUBLE PRECISION,
     rating_count INTEGER,
     answered_questions INTEGER,
     availability TEXT,
@@ -63,9 +63,9 @@ const SCHEMA = `
     position INTEGER NOT NULL,
     title TEXT,
     author TEXT,
-    rating REAL,
+    rating DOUBLE PRECISION,
     date TEXT,
-    verified_purchase INTEGER NOT NULL,
+    verified_purchase BOOLEAN NOT NULL,
     body TEXT,
     helpful_votes INTEGER,
     PRIMARY KEY (asin, position)
@@ -87,13 +87,12 @@ const SCHEMA = `
     PRIMARY KEY (asin, position)
   );
 
-  -- One row per visit, so a price or a rating can be traced over time.
   CREATE TABLE IF NOT EXISTS captures (
     asin TEXT NOT NULL REFERENCES products (asin) ON DELETE CASCADE,
-    captured_at TEXT NOT NULL,
-    price REAL,
-    list_price REAL,
-    rating_average REAL,
+    captured_at TIMESTAMPTZ NOT NULL,
+    price DOUBLE PRECISION,
+    list_price DOUBLE PRECISION,
+    rating_average DOUBLE PRECISION,
     rating_count INTEGER,
     availability TEXT,
     PRIMARY KEY (asin, captured_at)
@@ -158,220 +157,239 @@ export const TABLES = {
 
 export type TableName = keyof typeof TABLES;
 
+/** What identifies a row, and so the order a table reads back in. */
+const KEYS: Record<TableName, readonly string[]> = {
+  products: ["asin"],
+  attributes: ["asin", "kind", "key"],
+  features: ["asin", "position"],
+  images: ["asin", "position"],
+  reviews: ["asin", "position"],
+  questions: ["asin", "position"],
+  styling_ideas: ["asin", "position"],
+  captures: ["asin", "captured_at"],
+};
+
 /** The tables a product owns, cleared before it is written again. */
-const OWNED = [
+const OWNED: TableName[] = [
   "attributes",
   "features",
   "images",
   "reviews",
   "questions",
   "styling_ideas",
-] as const;
+];
 
-/** The catalog a walk fills in, as a SQLite database. */
+/** The catalog a walk fills in, as a Postgres database. */
 export class CatalogDb {
-  private constructor(private readonly db: DatabaseSync) {}
+  private constructor(private readonly client: Client) {}
 
-  static open(path: string): CatalogDb {
-    const db = new DatabaseSync(path);
-    db.exec("PRAGMA journal_mode = WAL");
-    db.exec("PRAGMA foreign_keys = ON");
-    db.exec(SCHEMA);
-    return new CatalogDb(db);
+  static async open(url: string): Promise<CatalogDb> {
+    const client = new Client(connection(url));
+    await client.connect();
+    await client.queryArray(SCHEMA);
+    return new CatalogDb(client);
   }
 
-  has(asin: string): boolean {
-    return this.db.prepare("SELECT 1 FROM products WHERE asin = ?").get(
-      asin,
-    ) !==
-      undefined;
+  async has(asin: string): Promise<boolean> {
+    const { rows } = await this.client.queryArray(
+      "SELECT 1 FROM products WHERE asin = $1",
+      [asin],
+    );
+    return rows.length > 0;
   }
 
-  count(department: string): number {
-    const row = this.db.prepare(
-      "SELECT count(*) AS n FROM products WHERE department = ?",
-    ).get(department) as { n: number };
-    return row.n;
+  async count(department: string): Promise<number> {
+    const { rows } = await this.client.queryArray<[number]>(
+      "SELECT count(*)::int FROM products WHERE department = $1",
+      [department],
+    );
+    return rows[0][0];
   }
 
   /** Writes a product and everything it owns, as one all-or-nothing step. */
-  save(product: Product, images: StoredImage[]): void {
-    this.db.exec("BEGIN");
+  async save(product: Product, images: StoredImage[]): Promise<void> {
+    await this.client.queryArray("BEGIN");
     try {
-      this.write(product, images);
-      this.db.exec("COMMIT");
+      await this.write(product, images);
+      await this.client.queryArray("COMMIT");
     } catch (error) {
-      this.db.exec("ROLLBACK");
+      await this.client.queryArray("ROLLBACK");
       throw error;
     }
   }
 
   /** Every row of a table, in the column order the schema declares. */
-  rows(table: TableName): unknown[][] {
-    const columns = TABLES[table].join(", ");
-    return this.db.prepare(`SELECT ${columns} FROM ${table}`).all().map((row) =>
-      TABLES[table].map((column) => (row as Record<string, unknown>)[column])
+  async rows(table: TableName): Promise<unknown[][]> {
+    const { rows } = await this.client.queryArray(
+      `SELECT ${TABLES[table].join(", ")} FROM ${table}
+       ORDER BY ${KEYS[table].join(", ")}`,
     );
+    return rows as unknown[][];
   }
 
-  close(): void {
-    this.db.close();
+  close(): Promise<void> {
+    return this.client.end();
   }
 
-  private write(product: Product, images: StoredImage[]): void {
-    this.db.prepare(
-      `INSERT INTO products (
-         asin, url, department, captured_at, title, brand, breadcrumbs,
-         price, list_price, currency, rating_average, rating_count,
-         answered_questions, availability, store_name, store_url, sold_by,
-         ships_from, seller_url, style, description, aplus
-       ) VALUES (${"?, ".repeat(21)}?)
-       ON CONFLICT (asin) DO UPDATE SET
-         url = excluded.url,
-         department = excluded.department,
-         captured_at = excluded.captured_at,
-         title = excluded.title,
-         brand = excluded.brand,
-         breadcrumbs = excluded.breadcrumbs,
-         price = excluded.price,
-         list_price = excluded.list_price,
-         currency = excluded.currency,
-         rating_average = excluded.rating_average,
-         rating_count = excluded.rating_count,
-         answered_questions = excluded.answered_questions,
-         availability = excluded.availability,
-         store_name = excluded.store_name,
-         store_url = excluded.store_url,
-         sold_by = excluded.sold_by,
-         ships_from = excluded.ships_from,
-         seller_url = excluded.seller_url,
-         style = excluded.style,
-         description = excluded.description,
-         aplus = excluded.aplus`,
-    ).run(
-      product.asin,
-      product.url,
-      product.department,
-      product.capturedAt,
-      text(product.title),
-      text(product.brand),
-      text(product.breadcrumbs.join(" > ")),
-      number(product.price?.amount),
-      number(product.listPrice?.amount),
-      text(product.price?.currency ?? product.listPrice?.currency),
-      number(product.rating.average),
-      number(product.rating.count),
-      number(product.answeredQuestions),
-      text(product.availability),
-      text(product.store.name),
-      text(product.store.url),
-      text(product.store.soldBy),
-      text(product.store.shipsFrom),
-      text(product.store.sellerUrl),
-      text(product.style),
-      text(product.description),
-      text(product.aplus),
+  private async write(product: Product, images: StoredImage[]): Promise<void> {
+    const asin = product.asin;
+
+    await this.client.queryArray(
+      `INSERT INTO products (${TABLES.products.join(", ")})
+       VALUES (${placeholders(TABLES.products.length)})
+       ON CONFLICT (asin) DO UPDATE SET ${
+        TABLES.products.filter((column) => column !== "asin")
+          .map((column) => `${column} = excluded.${column}`).join(", ")
+      }`,
+      productRow(product),
     );
 
     for (const table of OWNED) {
-      this.db.prepare(`DELETE FROM ${table} WHERE asin = ?`).run(product.asin);
+      await this.client.queryArray(`DELETE FROM ${table} WHERE asin = $1`, [
+        asin,
+      ]);
     }
 
-    const attribute = this.db.prepare(
-      "INSERT INTO attributes (asin, kind, key, value) VALUES (?, ?, ?, ?)",
-    );
-    for (const [kind, rows] of attributeKinds(product)) {
-      for (const [key, value] of Object.entries(rows)) {
-        attribute.run(product.asin, kind, key, value);
-      }
-    }
-
-    const feature = this.db.prepare(
-      "INSERT INTO features (asin, position, feature) VALUES (?, ?, ?)",
-    );
-    product.features.forEach((value, index) =>
-      feature.run(product.asin, index + 1, value)
+    await this.insert(
+      "attributes",
+      [
+        ...kind(product.details, "detail"),
+        ...kind(product.variations, "variation"),
+        ...kind(product.measurements, "measurement"),
+      ].map(([label, key, value]) => [asin, label, key, value]),
     );
 
-    const idea = this.db.prepare(
-      "INSERT INTO styling_ideas (asin, position, idea) VALUES (?, ?, ?)",
-    );
-    product.stylingIdeas.forEach((value, index) =>
-      idea.run(product.asin, index + 1, value)
+    await this.insert(
+      "features",
+      product.features.map((feature, index) => [asin, index + 1, feature]),
     );
 
-    const image = this.db.prepare(
-      "INSERT INTO images (asin, position, url, path) VALUES (?, ?, ?, ?)",
-    );
-    images.forEach((stored, index) =>
-      image.run(product.asin, index + 1, stored.url, text(stored.path))
-    );
-
-    const review = this.db.prepare(
-      `INSERT INTO reviews (
-         asin, position, title, author, rating, date, verified_purchase,
-         body, helpful_votes
-       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    product.reviews.forEach((entry, index) =>
-      review.run(
-        product.asin,
+    await this.insert(
+      "images",
+      images.map((image, index) => [
+        asin,
         index + 1,
-        text(entry.title),
-        text(entry.author),
-        number(entry.rating),
-        text(entry.date),
-        entry.verifiedPurchase ? 1 : 0,
-        text(entry.body),
-        number(entry.helpfulVotes),
-      )
+        image.url,
+        image.path ?? null,
+      ]),
     );
 
-    const question = this.db.prepare(
-      "INSERT INTO questions (asin, position, question, answer, votes) VALUES (?, ?, ?, ?, ?)",
-    );
-    product.questions.forEach((entry, index) =>
-      question.run(
-        product.asin,
+    await this.insert(
+      "reviews",
+      product.reviews.map((review, index) => [
+        asin,
         index + 1,
-        entry.question,
-        text(entry.answer),
-        number(entry.votes),
-      )
+        review.title ?? null,
+        review.author ?? null,
+        review.rating ?? null,
+        review.date ?? null,
+        review.verifiedPurchase,
+        review.body ?? null,
+        review.helpfulVotes ?? null,
+      ]),
     );
 
-    this.db.prepare(
-      `INSERT INTO captures (
-         asin, captured_at, price, list_price, rating_average, rating_count,
-         availability
-       ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    await this.insert(
+      "questions",
+      product.questions.map((question, index) => [
+        asin,
+        index + 1,
+        question.question,
+        question.answer ?? null,
+        question.votes ?? null,
+      ]),
+    );
+
+    await this.insert(
+      "styling_ideas",
+      product.stylingIdeas.map((idea, index) => [asin, index + 1, idea]),
+    );
+
+    // A product read twice keeps both readings, which is the price series.
+    await this.client.queryArray(
+      `INSERT INTO captures (${TABLES.captures.join(", ")})
+       VALUES (${placeholders(TABLES.captures.length)})
        ON CONFLICT (asin, captured_at) DO NOTHING`,
-    ).run(
-      product.asin,
-      product.capturedAt,
-      number(product.price?.amount),
-      number(product.listPrice?.amount),
-      number(product.rating.average),
-      number(product.rating.count),
-      text(product.availability),
+      [
+        asin,
+        product.capturedAt,
+        product.price?.amount ?? null,
+        product.listPrice?.amount ?? null,
+        product.rating.average ?? null,
+        product.rating.count ?? null,
+        product.availability ?? null,
+      ],
+    );
+  }
+
+  /** One statement per table, however many rows it carries. */
+  private async insert(table: TableName, rows: unknown[][]): Promise<void> {
+    if (rows.length === 0) return;
+
+    const width = TABLES[table].length;
+    const tuples = rows.map((_, row) => `(${placeholders(width, row * width)})`)
+      .join(", ");
+
+    await this.client.queryArray(
+      `INSERT INTO ${table} (${TABLES[table].join(", ")}) VALUES ${tuples}`,
+      rows.flat(),
     );
   }
 }
 
-function attributeKinds(
-  product: Product,
-): Array<[string, Record<string, string>]> {
+/**
+ * The driver reads a connection string, but only the object form carries the
+ * decoders — and it leaves float8 as text, which would turn every price and
+ * rating into a string on the way back out.
+ */
+export function connection(databaseUrl: string): ClientOptions {
+  const url = new URL(databaseUrl);
+  return {
+    hostname: url.hostname,
+    port: Number(url.port) || 5432,
+    user: decodeURIComponent(url.username),
+    password: decodeURIComponent(url.password) || undefined,
+    database: decodeURIComponent(url.pathname.replace(/^\//, "")),
+    controls: { decoders: { [Oid.float8]: (value: string) => Number(value) } },
+  };
+}
+
+function productRow(product: Product): unknown[] {
   return [
-    ["detail", product.details],
-    ["variation", product.variations],
-    ["measurement", product.measurements],
+    product.asin,
+    product.url,
+    product.department,
+    product.capturedAt,
+    product.title ?? null,
+    product.brand ?? null,
+    product.breadcrumbs.join(" > ") || null,
+    product.price?.amount ?? null,
+    product.listPrice?.amount ?? null,
+    product.price?.currency ?? product.listPrice?.currency ?? null,
+    product.rating.average ?? null,
+    product.rating.count ?? null,
+    product.answeredQuestions ?? null,
+    product.availability ?? null,
+    product.store.name ?? null,
+    product.store.url ?? null,
+    product.store.soldBy ?? null,
+    product.store.shipsFrom ?? null,
+    product.store.sellerUrl ?? null,
+    product.style ?? null,
+    product.description ?? null,
+    product.aplus ?? null,
   ];
 }
 
-function text(value?: string): string | null {
-  return value ?? null;
+function placeholders(count: number, offset = 0): string {
+  return Array.from({ length: count }, (_, i) => `$${offset + i + 1}`).join(
+    ", ",
+  );
 }
 
-function number(value?: number): number | null {
-  return value ?? null;
+function kind(
+  values: Record<string, string>,
+  label: string,
+): Array<[string, string, string]> {
+  return Object.entries(values).map(([key, value]) => [label, key, value]);
 }

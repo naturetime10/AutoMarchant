@@ -14,7 +14,10 @@ function task(args: string[], config: Config): Task {
       return () => Promise.resolve();
 
     case "discover": {
-      const settings = DiscoverySettings.parse(rest, config.outputDir);
+      const settings = DiscoverySettings.parse(rest, {
+        outputDir: config.outputDir,
+        databaseUrl: config.databaseUrl,
+      });
       return (session) => session.discover(settings);
     }
 
