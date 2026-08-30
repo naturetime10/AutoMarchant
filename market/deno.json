@@ -11,6 +11,7 @@
   "imports": {
     "@std/assert": "jsr:@std/assert@1",
     "playwright": "npm:playwright@^1.62.1",
-    "@db/postgres": "jsr:@db/postgres@^0.19.5"
+    "@db/postgres": "jsr:@db/postgres@^0.19.5",
+    "@std/toml": "jsr:@std/toml@^1"
   }
 }

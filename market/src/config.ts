@@ -1,8 +1,17 @@
-/** Settings for a sign-in run, read from the environment (see .env.example). */
+import { parse } from "@std/toml";
+
+/** Where the settings are kept, relative to market/. */
+const PATH = "config.toml";
+
+/** A table of settings, as TOML parses one. */
+type Settings = Record<string, unknown>;
+
+/**
+ * What a run does and how it does it, read from config.toml. Nothing here is
+ * a secret — the sign-in and the database string come from the environment
+ * instead, as `Credentials`.
+ */
 export class Config {
-  readonly email: string;
-  readonly password: string;
-  readonly totpSecret?: string;
   /** Amazon flags headless Chromium, so a real window is the default. */
   readonly headless: boolean;
   /** Chromium profile directory; keeps the Amazon session between runs. */
@@ -14,29 +23,86 @@ export class Config {
    * market/, so the default climbs to the repo-wide output tree.
    */
   readonly outputDir: string;
-  /** The Postgres database the catalog is kept in. */
-  readonly databaseUrl: string;
+  /** How many product pages a walk reads at once, a browser tab each. */
+  readonly concurrency: number;
 
-  constructor(env: Pick<Deno.Env, "get"> = Deno.env) {
-    this.email = Config.require(env, "AMAZON_EMAIL");
-    this.password = Config.require(env, "AMAZON_PASSWORD");
-    this.totpSecret = env.get("AMAZON_TOTP_SECRET")?.trim() || undefined;
-    this.headless = env.get("HEADLESS") === "true";
-    this.userDataDir = env.get("USER_DATA_DIR")?.trim() || ".playwright/amazon";
-    this.artifactsDir = env.get("ARTIFACTS_DIR")?.trim() || "artifacts";
-    this.databaseUrl = env.get("DATABASE_URL")?.trim() ||
-      "postgresql://localhost:5432/automerchant";
-    this.outputDir = env.get("OUTPUT_DIR")?.trim() ||
-      "../output/market/discover";
+  constructor(settings: Settings = {}) {
+    const browser = new Section("browser", settings);
+    const discover = new Section("discover", settings);
+
+    this.headless = browser.flag("headless", false);
+    this.userDataDir = browser.text("user_data_dir", ".playwright/amazon");
+    this.artifactsDir = browser.text("artifacts_dir", "artifacts");
+    this.outputDir = discover.text("output_dir", "../output/market/discover");
+    this.concurrency = discover.count("concurrency", 5);
   }
 
-  private static require(env: Pick<Deno.Env, "get">, name: string): string {
-    const value = env.get(name)?.trim();
-    if (!value) {
+  /** Reads config.toml; the built-in settings stand when it is not there. */
+  static async load(path = PATH): Promise<Config> {
+    const toml = await Deno.readTextFile(path).catch((error: unknown) => {
+      if (error instanceof Deno.errors.NotFound) return "";
+      throw error;
+    });
+    return new Config(parse(toml));
+  }
+}
+
+/**
+ * One `[section]` of config.toml. A setting it does not name keeps the value
+ * the code was written with; one it names wrongly is refused by name, before
+ * a browser is launched.
+ */
+class Section {
+  private readonly settings: Settings;
+
+  constructor(private readonly name: string, table: Settings) {
+    const section = table[name] ?? {};
+    if (
+      typeof section !== "object" || section === null || Array.isArray(section)
+    ) {
+      throw new Error(`${name} is a section of config.toml, not a value.`);
+    }
+    this.settings = section as Settings;
+  }
+
+  flag(key: string, fallback: boolean): boolean {
+    const value = this.settings[key];
+    if (value === undefined) return fallback;
+    if (typeof value !== "boolean") {
       throw new Error(
-        `Missing ${name}. Copy .env.example to .env and fill it in.`,
+        `${this.where(key)} is true or false, not ${show(value)}.`,
       );
     }
     return value;
   }
+
+  text(key: string, fallback: string): string {
+    const value = this.settings[key];
+    if (value === undefined) return fallback;
+    if (typeof value !== "string" || value.trim() === "") {
+      throw new Error(`${this.where(key)} takes a path, not ${show(value)}.`);
+    }
+    return value.trim();
+  }
+
+  count(key: string, fallback: number): number {
+    const value = this.settings[key];
+    if (value === undefined) return fallback;
+    if (typeof value !== "number" || !Number.isInteger(value) || value < 1) {
+      throw new Error(
+        `${this.where(key)} takes a whole number of at least 1, not ${
+          show(value)
+        }.`,
+      );
+    }
+    return value;
+  }
+
+  private where(key: string): string {
+    return `${this.name}.${key}`;
+  }
+}
+
+function show(value: unknown): string {
+  return JSON.stringify(value) ?? String(value);
 }

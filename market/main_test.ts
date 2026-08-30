@@ -1,5 +1,5 @@
-import { assertEquals, assertRejects, assertThrows } from "@std/assert";
-import { Config } from "./src/config.ts";
+import { assertEquals, assertRejects } from "@std/assert";
+import { Credentials } from "./src/credentials.ts";
 import { OtpSource, PromptOtpSource, TotpSource } from "./src/otp.ts";
 
 const env = (values: Record<string, string>) => ({
@@ -15,33 +15,15 @@ const credentials = {
 const RFC_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
 const at = (millis: number) => new TotpSource(RFC_SECRET, () => millis);
 
-Deno.test("Config reads credentials and applies defaults", () => {
-  const config = new Config(env(credentials));
-
-  assertEquals(config.email, "shopper@example.com");
-  assertEquals(config.password, "hunter2");
-  assertEquals(config.totpSecret, undefined);
-  assertEquals(config.headless, false);
-  assertEquals(config.userDataDir, ".playwright/amazon");
-  assertEquals(config.outputDir, "../output/market/discover");
-  assertEquals(
-    config.databaseUrl,
-    "postgresql://localhost:5432/automerchant",
-  );
-});
-
-Deno.test("Config fails loudly without credentials", () => {
-  assertThrows(() => new Config(env({})), Error, "AMAZON_EMAIL");
-});
-
 Deno.test("OtpSource uses the secret when there is one, else the prompt", () => {
-  const withSecret = new Config(
+  const withSecret = new Credentials(
     env({ ...credentials, AMAZON_TOTP_SECRET: RFC_SECRET }),
   );
 
   assertEquals(OtpSource.from(withSecret) instanceof TotpSource, true);
   assertEquals(
-    OtpSource.from(new Config(env(credentials))) instanceof PromptOtpSource,
+    OtpSource.from(new Credentials(env(credentials))) instanceof
+      PromptOtpSource,
     true,
   );
 });

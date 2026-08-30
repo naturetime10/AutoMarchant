@@ -5,6 +5,7 @@ import { DiscoverySettings } from "./discovery.ts";
 const DEFAULTS = {
   outputDir: "../output/market/discover",
   databaseUrl: "postgresql://localhost:5432/automerchant",
+  concurrency: 5,
 };
 
 Deno.test("settings walk every department and every page by default", () => {
@@ -17,6 +18,7 @@ Deno.test("settings walk every department and every page by default", () => {
   assertEquals(settings.databaseUrl, DEFAULTS.databaseUrl);
   assertEquals(settings.imageLimit, Number.POSITIVE_INFINITY);
   assertEquals(settings.refresh, false);
+  assertEquals(settings.concurrency, 5);
 });
 
 Deno.test("settings narrow the walk to the flags given", () => {
@@ -52,6 +54,22 @@ Deno.test("settings take an output directory of their own", () => {
   assertEquals(
     DiscoverySettings.parse(["--out=/tmp/catalog"], DEFAULTS).outputDir,
     "/tmp/catalog",
+  );
+});
+
+Deno.test("settings read as many products at once as asked for", () => {
+  const configured = { ...DEFAULTS, concurrency: 3 };
+
+  assertEquals(DiscoverySettings.parse([], configured).concurrency, 3);
+  // The flag wins over what config.toml set.
+  assertEquals(
+    DiscoverySettings.parse(["--concurrency=4"], configured).concurrency,
+    4,
+  );
+  assertThrows(
+    () => DiscoverySettings.parse(["--concurrency=0"], DEFAULTS),
+    Error,
+    "--concurrency",
   );
 });
 

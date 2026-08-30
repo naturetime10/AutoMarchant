@@ -1,0 +1,17 @@
+# How a run behaves. Credentials are not settings — they live in .env.
+
+[browser]
+# Amazon flags headless Chromium, so a real window is the default.
+headless = false
+# Chromium profile; it keeps the Amazon session between runs.
+user_data_dir = ".playwright/amazon"
+# Where a screenshot and HTML dump of a failed run are written.
+artifacts_dir = "artifacts"
+
+[discover]
+# Product pages read at once, a browser tab each. The request rate rises with
+# it, so lower it if Amazon starts serving captchas; --concurrency=N overrides
+# it for one run.
+concurrency = 5
+# Where a walk writes its images, CSV, and log. Recipes run inside market/.
+output_dir = "../output/market/discover"
