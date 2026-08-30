@@ -3,10 +3,7 @@ import type { Config } from "../config.ts";
 import { OtpSource } from "../otp.ts";
 import { SignInPage, type SignInStep } from "./sign_in_page.ts";
 import { Tour, type TourStop } from "./tour.ts";
-
-// Order history is a real auth gate. /gp/css/homepage.html is not: it renders
-// a "Your Account" page for signed-out visitors instead of redirecting.
-const ORDERS_URL = "https://www.amazon.com/gp/css/order-history";
+import { AmazonUrls } from "./urls.ts";
 
 /** Caps a redirect loop between sign-in pages. */
 const MAX_STEPS = 12;
@@ -15,6 +12,7 @@ const MAX_STEPS = 12;
 export class AmazonSession {
   private readonly signInPage: SignInPage;
   private readonly otp: OtpSource;
+  private readonly urls = new AmazonUrls();
 
   private constructor(
     private readonly config: Config,
@@ -39,9 +37,14 @@ export class AmazonSession {
     return new AmazonSession(config, context, page);
   }
 
-  /** Opens order history; signed-out visitors are bounced to /ap/signin. */
+  /**
+   * Opens order history, a real auth gate: signed-out visitors are bounced to
+   * /ap/signin. (/gp/css/homepage.html is not — it renders for them instead.)
+   */
   async isSignedIn(): Promise<boolean> {
-    await this.page.goto(ORDERS_URL, { waitUntil: "domcontentloaded" });
+    await this.page.goto(this.urls.orderHistory(), {
+      waitUntil: "domcontentloaded",
+    });
     return await this.signInPage.settledStep() === "signed-in";
   }
 

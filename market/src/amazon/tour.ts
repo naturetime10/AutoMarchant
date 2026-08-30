@@ -1,5 +1,6 @@
 import type { Page } from "playwright";
 import { type Highlight, Highlighter } from "./highlighter.ts";
+import type { AmazonUrls } from "./urls.ts";
 
 /** One page of the tour, and the regions worth pointing at on it. */
 export interface TourStop {
@@ -13,11 +14,11 @@ const SAMPLE_ASIN = "B088NRLMPV";
 const SAMPLE_SELLER = "A294P4X9EWVXLJ";
 
 /** The pages that list products or expose sales and seller information. */
-export function tourStops(): TourStop[] {
+export function tourStops(urls: AmazonUrls): TourStop[] {
   return [
     {
       label: "search results",
-      url: "https://www.amazon.com/s?k=usb+c+cable",
+      url: urls.search("usb c cable"),
       highlights: [
         {
           selector: "div[data-component-type='s-search-result']",
@@ -28,7 +29,7 @@ export function tourStops(): TourStop[] {
     },
     {
       label: "best sellers",
-      url: "https://www.amazon.com/gp/bestsellers/electronics/",
+      url: urls.chart("bestsellers", "electronics"),
       highlights: [
         { selector: "#gridItemRoot", note: "ranked product" },
         { selector: ".zg-bdg-text", note: "rank" },
@@ -36,7 +37,7 @@ export function tourStops(): TourStop[] {
     },
     {
       label: "movers and shakers",
-      url: "https://www.amazon.com/gp/movers-and-shakers/electronics/",
+      url: urls.chart("movers-and-shakers", "electronics"),
       highlights: [
         { selector: ".p13n-sc-uncoverable-faceout", note: "climbing product" },
       ],
@@ -45,7 +46,7 @@ export function tourStops(): TourStop[] {
       // /b?node= is a merchandising landing page; the node-filtered search is
       // where a category actually lists its products in a grid.
       label: "category search",
-      url: "https://www.amazon.com/s?k=cable&rh=n%3A172282",
+      url: urls.search("cable", { node: "172282" }),
       highlights: [
         {
           selector: "div[data-component-type='s-search-result']",
@@ -56,7 +57,7 @@ export function tourStops(): TourStop[] {
     },
     {
       label: "product detail",
-      url: `https://www.amazon.com/dp/${SAMPLE_ASIN}`,
+      url: urls.product(SAMPLE_ASIN),
       highlights: [
         { selector: "#productTitle", note: "title", limit: 1 },
         { selector: "#corePrice_feature_div", note: "price", limit: 1 },
@@ -70,7 +71,7 @@ export function tourStops(): TourStop[] {
     },
     {
       label: "seller profile",
-      url: `https://www.amazon.com/sp?seller=${SAMPLE_SELLER}`,
+      url: urls.sellerProfile(SAMPLE_SELLER),
       highlights: [
         { selector: "#seller-name", note: "seller", limit: 1 },
         {
@@ -82,7 +83,7 @@ export function tourStops(): TourStop[] {
     },
     {
       label: "seller storefront",
-      url: `https://www.amazon.com/s?me=${SAMPLE_SELLER}`,
+      url: urls.sellerStorefront(SAMPLE_SELLER),
       highlights: [
         {
           selector: "div[data-component-type='s-search-result']",
@@ -92,7 +93,7 @@ export function tourStops(): TourStop[] {
     },
     {
       label: "order history",
-      url: "https://www.amazon.com/gp/css/order-history",
+      url: urls.orderHistory(),
       highlights: [
         {
           selector: ".your-orders-content-container__content",

@@ -1,5 +1,6 @@
 import { AmazonSession } from "./src/amazon/session.ts";
 import { tourStops } from "./src/amazon/tour.ts";
+import { AmazonUrls } from "./src/amazon/urls.ts";
 import { Config } from "./src/config.ts";
 
 async function signIn(config: Config, command?: string): Promise<void> {
@@ -7,7 +8,7 @@ async function signIn(config: Config, command?: string): Promise<void> {
   try {
     await session.signIn();
     console.log(`Signed in to Amazon as ${config.email}`);
-    if (command === "tour") await session.tour(tourStops());
+    if (command === "tour") await session.tour(tourStops(new AmazonUrls()));
   } catch (error) {
     await session.saveDiagnostics();
     throw error;
