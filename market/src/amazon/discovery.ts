@@ -7,11 +7,18 @@ import {
   selectDepartments,
 } from "./departments.ts";
 import { ImageStore } from "./image_store.ts";
+import { BLOCK_REASON, Interstitial } from "./interstitial.ts";
 import type { Product } from "./product.ts";
 import { ProductPage } from "./product_page.ts";
 import { SearchResultsPage } from "./search_results_page.ts";
 import type { RunLog } from "../run_log.ts";
 import type { AmazonUrls } from "./urls.ts";
+
+/** How many times a blocked page is asked for again before giving up. */
+const MAX_RETRIES = 3;
+
+/** How long to wait out the first block; each retry waits twice as long. */
+const FIRST_BACKOFF_MS = 5_000;
 
 export interface DiscoveryOptions {
   departments?: readonly Department[];
@@ -244,6 +251,7 @@ class Tabs {
 class Tab {
   private readonly results: SearchResultsPage;
   private readonly product: ProductPage;
+  private readonly gate: Interstitial;
 
   constructor(
     private readonly page: Page,
@@ -253,13 +261,12 @@ class Tab {
   ) {
     this.results = new SearchResultsPage(page);
     this.product = new ProductPage(page);
+    this.gate = new Interstitial(page);
   }
 
   /** The ASINs one listing page ranks, in the order Amazon ranked them. */
   async asins(department: Department, page: number): Promise<string[]> {
-    await this.page.goto(this.urls.department(department.node, page), {
-      waitUntil: "domcontentloaded",
-    });
+    await this.visit(this.urls.department(department.node, page));
     if (!await this.results.waitForResults()) return [];
     return await this.results.asins();
   }
@@ -270,9 +277,7 @@ class Tab {
     department: Department,
   ): Promise<Product | undefined> {
     try {
-      await this.page.goto(this.urls.product(asin), {
-        waitUntil: "domcontentloaded",
-      });
+      await this.visit(this.urls.product(asin));
       if (!await this.product.waitForProduct()) {
         await this.log.error(`    ${asin}  skipped: no product page`);
         return undefined;
@@ -293,6 +298,37 @@ class Tab {
 
   close(): Promise<void> {
     return this.page.close();
+  }
+
+  /**
+   * Opens a page, clearing whatever Amazon serves in its place and asking
+   * again. A block means the walk is reading too quickly, so each retry waits
+   * longer than the last; one that outlasts them is raised rather than
+   * returned, so a blocked walk says so instead of recording an empty
+   * department.
+   */
+  private async visit(url: string): Promise<void> {
+    await this.page.goto(url, { waitUntil: "domcontentloaded" });
+
+    let backoffMs = FIRST_BACKOFF_MS;
+    for (let retry = 1; retry <= MAX_RETRIES; retry++) {
+      const block = await this.gate.block();
+      if (block === "none") return;
+
+      await this.log.error(
+        `    ${BLOCK_REASON[block]}; waiting ${backoffMs / 1000}s and asking ` +
+          `again (${retry}/${MAX_RETRIES})`,
+      );
+      await this.gate.dismiss(block);
+      await this.page.waitForTimeout(backoffMs);
+      backoffMs *= 2;
+      await this.page.goto(url, { waitUntil: "domcontentloaded" });
+    }
+
+    const block = await this.gate.block();
+    if (block !== "none") {
+      throw new Error(`${BLOCK_REASON[block]} for ${url}, and kept serving it`);
+    }
   }
 }
 
