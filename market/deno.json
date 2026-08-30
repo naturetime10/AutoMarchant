@@ -1,11 +1,5 @@
 {
   "nodeModulesDir": "auto",
-  "tasks": {
-    "login": "deno run -A --env-file=.env main.ts",
-    "install-browser": "deno run -A npm:playwright@1 install chromium",
-    "check": "deno check main.ts main_test.ts",
-    "test": "deno test --allow-env"
-  },
   "imports": {
     "@std/assert": "jsr:@std/assert@1",
     "playwright": "npm:playwright@^1.62.1"
