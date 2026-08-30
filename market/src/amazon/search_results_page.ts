@@ -14,14 +14,19 @@ export class SearchResultsPage {
       .catch(() => false);
   }
 
-  /** The ASINs on screen, in the order Amazon ranked them. */
-  asins(): Promise<string[]> {
-    return this.page.evaluate(
+  /**
+   * The ASINs on screen, in the order Amazon ranked them. A product Amazon
+   * sponsors on a page it already ranks it on has a tile either way, so the
+   * ASINs are the products the page holds rather than the tiles it drew.
+   */
+  async asins(): Promise<string[]> {
+    const ranked = await this.page.evaluate(
       (selector) =>
         [...document.querySelectorAll(selector)]
           .map((tile) => tile.getAttribute("data-asin") ?? "")
           .filter((asin) => /^[A-Z0-9]{10}$/.test(asin)),
       RESULT,
     );
+    return [...new Set(ranked)];
   }
 }

@@ -90,24 +90,40 @@ psql "$DATABASE_URL" -c \
    ORDER BY rating_average DESC LIMIT 10"
 ```
 
-A product already in the catalog is skipped, so a walk resumes where it left
-off. `--refresh` reads it again instead: the product is updated in place and a
+A product already in the catalog is skipped, so a rerun costs nothing for what
+it has. `--refresh` reads it again instead: the product is updated in place and a
 row is added to `captures`, which is how a price series accumulates.
 
-A walk also keeps its place in the listings, in `walks`: a department's row
-names the page its next walk opens, written once every product a page ranks
-has been read. So a walk stopped at page 40 — by `--products`, by a block, or
-by Ctrl-C — starts again at page 40 rather than reading its way back down to
-it. A page left half-read is not stepped over; it is read again, and the
-products it already has are the ones a rerun skips anyway. A department walked
-to the end of its listings keeps no place at all, so its next walk starts at
-page 1, where a listing puts what it has newly ranked. `--pages=N` counts the
-pages a run reads, not the page it may reach, so a resumed walk gets as many of
-them as a fresh one.
+A walk resumes on the products themselves, not on a page number. Every listing
+page puts what it ranks into `listings` — a row per product, naming the page
+and the rank it was found at — and a product leaves that queue only once it has
+been read. A walk reads the queue first, then lists the page it stopped at
+(`walks` holds that page per department) and reads what each new page adds. So
+a walk stopped forty pages into Electronics — by `--products`, by a block, or
+by Ctrl-C — picks up on the products it saw and never got to, and it picks them
+up even though Amazon has re-ranked the department since: a product that has
+moved to another page, or off the listings entirely, is still queued under the
+ASIN it was ranked by.
 
-`--restart` walks a department from page 1 and forgets where the last one
-stopped; `--refresh`, which is there to read known products again, starts at
-the top for the same reason.
+A department listed to the end keeps no place, so its next walk lists from page
+1 again, where what has newly been ranked appears — and the products that walk
+has already read stay out of the queue. `--pages=N` counts the pages a run
+lists, not the page it may reach, so a resumed walk gets as many of them as a
+fresh one.
+
+A product page that will not load is asked for again by the next walk, and by
+the one after that; a fourth leaves it alone, so a walk does not open the same
+delisted product ahead of everything else forever. `--restart` lists a
+department from page 1 and gives those another chance. `--refresh` reads the
+pages it lists rather than the queue — reading known products again is what it
+is for — so `--refresh --pages=2` re-reads two pages rather than everything the
+department has ever ranked.
+
+```sh
+psql "$DATABASE_URL" -c \
+  "SELECT count(*) FROM listings l LEFT JOIN products p USING (asin)
+   WHERE l.department = 'electronics' AND p.asin IS NULL"   -- still to read
+```
 
 ```sh
 just market discover --departments=electronics,books --pages=2 --products=50
