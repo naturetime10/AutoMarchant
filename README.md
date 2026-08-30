@@ -1,19 +1,23 @@
 # AutoMerchant
 
-Recipes are run with [`just`](https://github.com/casey/just) from the repo root,
-one module per subproject. `just` lists the modules; `just --list market` lists
-that module's recipes.
+Recipes are run with [`just`](https://github.com/casey/just) from the repo root.
+Repo-wide recipes fan out across subprojects; each subproject is a module with
+its own. `just` lists the former, `just --list market` the latter.
+
+```sh
+just install                         # one-time setup for every subproject
+just test
+just check                           # fmt, lint, type check
+just fmt
+```
 
 ## market
 
 Deno + Playwright automation for a personal Amazon account.
 
 ```sh
-just market install                  # one-time Chromium download
 cp market/.env.example market/.env   # then fill in AMAZON_EMAIL / AMAZON_PASSWORD
-just market login                    # sign in
-just market check                    # fmt, lint, type check
-just market test
+just market run                      # sign in
 ```
 
 Sign-in runs in a visible Chromium window by default — Amazon flags headless

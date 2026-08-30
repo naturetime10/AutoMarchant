@@ -1,10 +1,10 @@
+# Sign in to Amazon; the session is kept in the browser profile.
+run:
+    deno run -A --env-file=.env main.ts
+
 # One-time Chromium download for Playwright.
 install:
     deno run -A npm:playwright@^1.62.1 install chromium
-
-# Sign in to Amazon; the session is kept in the browser profile.
-login:
-    deno run -A --env-file=.env main.ts
 
 # Unit tests.
 test:
