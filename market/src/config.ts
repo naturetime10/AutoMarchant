@@ -34,7 +34,7 @@ export class Config {
     this.userDataDir = browser.text("user_data_dir", ".playwright/amazon");
     this.artifactsDir = browser.text("artifacts_dir", "artifacts");
     this.outputDir = discover.text("output_dir", "../output/market/discover");
-    this.concurrency = discover.count("concurrency", 16);
+    this.concurrency = discover.count("concurrency", 5);
   }
 
   /** Reads config.toml; the built-in settings stand when it is not there. */

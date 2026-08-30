@@ -15,7 +15,7 @@ Deno.test("the built-in settings stand when there is no config.toml", async () =
   assertEquals(config.userDataDir, ".playwright/amazon");
   assertEquals(config.artifactsDir, "artifacts");
   assertEquals(config.outputDir, "../output/market/discover");
-  assertEquals(config.concurrency, 16);
+  assertEquals(config.concurrency, 5);
 });
 
 Deno.test("config.toml settles how the browser runs and what a walk does", async () => {
@@ -72,7 +72,7 @@ Deno.test("a setting of the wrong kind is refused, by name", async () => {
 });
 
 Deno.test("the settings can be built without a file at all", () => {
-  assertEquals(new Config().concurrency, 16);
+  assertEquals(new Config().concurrency, 5);
   assertThrows(
     () => new Config({ discover: { concurrency: -1 } }),
     Error,

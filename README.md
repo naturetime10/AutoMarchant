@@ -81,7 +81,7 @@ just market discover --departments=electronics --concurrency=4
 dial on how long a walk takes. Listing pages are still read one at a time and
 in order; it is the product pages behind them that are shared out, and each
 tab waits `--pause` between its own, so N tabs make roughly N times the
-requests a single tab did. Sixteen is the default; `concurrency` under
+requests a single tab did. Five is the default; `concurrency` under
 `[discover]` in `market/config.toml` sets a different one for every run, and
 `--concurrency=N` overrides that for a single walk. Lower it if Amazon starts
 serving captchas — a walk that trips its bot checks costs more than the wait

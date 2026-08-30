@@ -5,7 +5,7 @@ import { DiscoverySettings } from "./discovery.ts";
 const DEFAULTS = {
   outputDir: "../output/market/discover",
   databaseUrl: "postgresql://localhost:5432/automerchant",
-  concurrency: 16,
+  concurrency: 5,
 };
 
 Deno.test("settings walk every department and every page by default", () => {
@@ -18,7 +18,7 @@ Deno.test("settings walk every department and every page by default", () => {
   assertEquals(settings.databaseUrl, DEFAULTS.databaseUrl);
   assertEquals(settings.imageLimit, Number.POSITIVE_INFINITY);
   assertEquals(settings.refresh, false);
-  assertEquals(settings.concurrency, 16);
+  assertEquals(settings.concurrency, 5);
 });
 
 Deno.test("settings narrow the walk to the flags given", () => {
