@@ -5,6 +5,10 @@
 headless = false
 # Chromium profile; it keeps the Amazon session between runs.
 user_data_dir = ".playwright/amazon"
+# The profile a walk reads in. Amazon throttles the account that reads too
+# much of its storefront, and a walk needs no account, so it reads in a
+# profile of its own.
+walk_data_dir = ".playwright/walk"
 # Where a screenshot and HTML dump of a failed run are written.
 artifacts_dir = "artifacts"
 

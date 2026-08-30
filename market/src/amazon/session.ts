@@ -15,7 +15,12 @@ const ORDERS_URL = "https://www.amazon.com/gp/css/order-history";
 /** Caps a redirect loop between sign-in pages. */
 const MAX_STEPS = 12;
 
-/** A Chromium profile signed in to Amazon; the profile outlives the process. */
+/**
+ * A Chromium profile pointed at Amazon; the profile outlives the process, so
+ * a sign-in carries forward into later runs. Which profile is opened is the
+ * caller's to say: the account lives in one, and a walk — which reads pages
+ * that need no account — reads in another.
+ */
 export class AmazonSession {
   private readonly signInPage: SignInPage;
   private readonly otp: OtpSource;
@@ -36,10 +41,11 @@ export class AmazonSession {
   static async open(
     config: Config,
     credentials: Credentials,
+    userDataDir: string = config.userDataDir,
   ): Promise<AmazonSession> {
-    await Deno.mkdir(config.userDataDir, { recursive: true });
+    await Deno.mkdir(userDataDir, { recursive: true });
 
-    const context = await chromium.launchPersistentContext(config.userDataDir, {
+    const context = await chromium.launchPersistentContext(userDataDir, {
       headless: config.headless,
       // Amazon's layout follows the viewport, so the window fills the screen
       // and the viewport follows it. Headless has no screen to fill.
