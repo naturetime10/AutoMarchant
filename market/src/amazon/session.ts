@@ -2,6 +2,7 @@ import { type BrowserContext, chromium, type Page } from "playwright";
 import type { Config } from "../config.ts";
 import { OtpSource } from "../otp.ts";
 import { SignInPage, type SignInStep } from "./sign_in_page.ts";
+import { Tour, type TourStop } from "./tour.ts";
 
 // Order history is a real auth gate. /gp/css/homepage.html is not: it renders
 // a "Your Account" page for signed-out visitors instead of redirecting.
@@ -69,6 +70,13 @@ export class AmazonSession {
     }
 
     throw new Error(`Gave up after ${MAX_STEPS} sign-in steps.`);
+  }
+
+  /** Walks the given pages, outlining the regions worth scraping on each. */
+  async tour(stops: TourStop[], pauseMs = 2500): Promise<void> {
+    await new Tour(this.page, `${this.config.artifactsDir}/tour`, pauseMs).run(
+      stops,
+    );
   }
 
   /** Records what the failing page looked like, for after-the-fact debugging. */

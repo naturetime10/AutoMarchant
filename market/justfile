@@ -14,8 +14,12 @@ test:
 check:
     deno fmt --check
     deno lint
-    deno check main.ts main_test.ts
+    deno check .
 
 # Apply formatting.
 fmt:
     deno fmt
+
+# Walk the scraped pages in a browser, outlining each region.
+tour:
+    deno run -A --env-file=.env main.ts tour
