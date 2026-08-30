@@ -24,6 +24,10 @@ export interface AuditOptions {
   pauseMs?: number;
   /** Product pages read at once, a tab each; five of them by default. */
   concurrency?: number;
+  /** Write the page over the record it disagrees with, rather than reporting it. */
+  fix?: boolean;
+  /** Preview images to download for a record being fixed; none when 0. */
+  imageLimit?: number;
 }
 
 /** What one `audit` run should cover, and where to write what it made of it. */
@@ -34,6 +38,8 @@ export class AuditSettings {
   readonly databaseUrl: string;
   readonly pauseMs: number;
   readonly concurrency: number;
+  readonly fix: boolean;
+  readonly imageLimit: number;
 
   constructor(options: AuditOptions = {}) {
     this.departments = options.departments ?? DEPARTMENTS;
@@ -43,6 +49,8 @@ export class AuditSettings {
       "postgresql://localhost:5432/automerchant";
     this.pauseMs = options.pauseMs ?? 1200;
     this.concurrency = options.concurrency ?? 5;
+    this.fix = options.fix ?? false;
+    this.imageLimit = options.imageLimit ?? Number.POSITIVE_INFINITY;
   }
 
   /** Reads the flags `main.ts audit` was given, over what .env set. */
@@ -57,6 +65,8 @@ export class AuditSettings {
       "database",
       "pause",
       "concurrency",
+      "fix",
+      "images",
     ]);
     const departments = flags.words("departments");
 
@@ -67,6 +77,8 @@ export class AuditSettings {
       databaseUrl: flags.text("database") ?? defaults.databaseUrl,
       pauseMs: flags.count("pause", 0),
       concurrency: flags.count("concurrency", 1) ?? defaults.concurrency,
+      fix: flags.given("fix"),
+      imageLimit: flags.count("images", 0),
     });
   }
 }
@@ -77,6 +89,8 @@ export type Verdict =
   | "matches"
   /** The page says something else now, field by field. */
   | "differs"
+  /** The page said something else, and the record was written as it reads. */
+  | "fixed"
   /** There is no product page behind the record any more. */
   | "gone";
 
@@ -156,8 +170,9 @@ export class Audit {
     const catalog = await Catalog.open(
       this.settings.outputDir,
       this.settings.databaseUrl,
-      // An audit saves no product, so no image is ever asked of the store.
-      ImageStore.into(this.settings.outputDir, 0),
+      // Nothing is asked of the store unless a record is being put right, and
+      // then the images are the page's as much as the price is.
+      ImageStore.into(this.settings.outputDir, this.settings.imageLimit),
     );
     const tabs = await Tabs.open(
       this.context,
@@ -189,9 +204,11 @@ export class Audit {
  * --products carries on where the last one stopped and a catalog is worked
  * through over as many runs as it takes.
  *
- * An audit reads and reports; it changes no record it disagrees with. What a
- * page says now is what `discover --refresh` is for, and the audit is what
- * says which products are worth spending it on.
+ * An audit reads and reports; it changes no record it disagrees with unless
+ * it is asked to. `--fix` is what asks: a record the page has moved on from is
+ * written as the page reads now, images and all, and the reading joins the
+ * price series like any other. A record with no page left behind it is not one
+ * a fix can put right, so it is reported and left where it is.
  */
 export class Inspection {
   constructor(
@@ -211,19 +228,22 @@ export class Inspection {
     if (due.length === 0) return;
 
     await this.log.info(`${department.name} -> ${this.catalog.label}`);
-    const tally = { checked: 0, differs: 0, gone: 0 };
+    // Every record the page had moved on from was put right, in a run that
+    // was asked to, so the one tally answers to both words.
+    const tally = { checked: 0, apart: 0, gone: 0 };
 
     await this.pages.each(due, async (asin, reader) => {
       const verdict = await this.check(asin, department, reader);
       if (!verdict) return;
       tally.checked++;
-      if (verdict === "differs") tally.differs++;
       if (verdict === "gone") tally.gone++;
+      else if (verdict !== "matches") tally.apart++;
     });
 
     await this.log.info(
       `  ${department.slug}: ${tally.checked} checked, ` +
-        `${tally.differs} differs, ${tally.gone} gone`,
+        `${tally.apart} ${this.settings.fix ? "fixed" : "differs"}, ` +
+        `${tally.gone} gone`,
     );
   }
 
@@ -248,15 +268,24 @@ export class Inspection {
       await this.log.error(`    ${asin}  gone: no product page`);
     } else if (apart.length > 0) {
       await this.log.info(
-        `    ${asin}  differs: ${apart.map(({ field }) => field).join(", ")}`,
+        `    ${asin}  ${this.settings.fix ? "fixed" : "differs"}: ${
+          apart.map(({ field }) => field).join(", ")
+        }`,
       );
     }
 
     const verdict: Verdict = !found
       ? "gone"
-      : apart.length > 0
-      ? "differs"
-      : "matches";
+      : apart.length === 0
+      ? "matches"
+      : this.settings.fix
+      ? "fixed"
+      : "differs";
+
+    // The record goes in before the finding does: writing a product drops the
+    // audit of it — right for a walk, which leaves a record nobody has checked
+    // — and it would take this audit's own finding with it.
+    if (found && verdict === "fixed") await this.catalog.save(found);
     await this.catalog.audited({
       asin,
       checkedAt,

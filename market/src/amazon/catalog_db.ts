@@ -397,6 +397,15 @@ export class CatalogDb {
         // A category first met in a rank hangs from nothing; a trail passing
         // through it now says where it belongs, and what it is called there.
         if (parent !== null && hangsFrom === null) {
+          // Unless a trail got there first, under the name the trail writes
+          // and without the node to say the two were one category. They are:
+          // the row in the tree is where the category belongs, so the rank's
+          // row hands over what it holds rather than moving on top of it.
+          const standing = await this.idAt(parent, category.name);
+          if (standing !== undefined && standing !== id) {
+            await this.merge(id, standing, category.node);
+            return standing;
+          }
           await this.client.queryArray(
             "UPDATE categories SET parent_id = $1, name = $2 WHERE id = $3",
             [parent, category.name, id],
@@ -417,6 +426,50 @@ export class CatalogDb {
       [parent, category.name, category.node ?? null],
     );
     return rows[0][0];
+  }
+
+  /** The category of that name among a parent's children, if there is one. */
+  private async idAt(
+    parent: number | null,
+    name: string,
+  ): Promise<number | undefined> {
+    const { rows } = await this.client.queryArray<[number]>(
+      `SELECT id FROM categories
+       WHERE parent_id IS NOT DISTINCT FROM $1 AND name = $2`,
+      [parent, name],
+    );
+    return rows[0]?.[0];
+  }
+
+  /**
+   * Two rows for one category: the one a rank left at the top of the tree,
+   * and the one a trail had already put in its place. The trail's row is the
+   * one that stays, since it is where the tree hangs the category; the rank's
+   * hands over the products filed under it, and the node that named it, and
+   * goes. Nothing hangs beneath it to carry over — a row a trail has walked
+   * through is a row a trail has given a parent, so one still at the top has
+   * never had children put under it.
+   */
+  private async merge(
+    from: number,
+    into: number,
+    node: string | undefined,
+  ): Promise<void> {
+    await this.client.queryArray(
+      `INSERT INTO product_categories (asin, category_id)
+       SELECT asin, $2 FROM product_categories WHERE category_id = $1
+       ON CONFLICT DO NOTHING`,
+      [from, into],
+    );
+    await this.client.queryArray("DELETE FROM categories WHERE id = $1", [
+      from,
+    ]);
+    // The node moves only once the row that held it is gone: it is unique to
+    // one row, which is the whole of what makes it an identity.
+    await this.client.queryArray(
+      "UPDATE categories SET node = $2 WHERE id = $1 AND node IS NULL",
+      [into, node ?? null],
+    );
   }
 
   /**

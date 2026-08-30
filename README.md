@@ -219,10 +219,17 @@ psql "$DATABASE_URL" -c \
     WHERE a.verdict = 'differs' ORDER BY a.checked_at DESC LIMIT 20"
 ```
 
-An audit reads and reports; it changes no record it disagrees with.
-`discover --refresh` is what writes a product as its page reads now, and the
-audit is what says which products are worth spending it on. A record a walk
-writes again drops its audit with it: one just read is one nobody has checked.
+An audit reads and reports; it changes no record it disagrees with unless it
+is asked to. `--fix` is what asks: a record the page has moved on from is
+written as the page reads now — images and all, the reading joining the price
+series in `captures` like any other — and its verdict is `fixed` rather than
+`differs`, with the differences kept beside it to say what the record used to
+hold. A record with no page left behind it is not one a rescan can put right,
+so `gone` is reported and left where it is, for you to decide about.
+
+A record a walk writes again drops its audit with it: one just read is one
+nobody has checked. So a plain `audit` is the report `--fix` acts on, and
+running the fix straight away is the same work in one pass.
 
 The records it has been longest since checking go first, and the ones it has
 never checked before those, so `--products=N` works a department through over
@@ -233,4 +240,6 @@ waits out a block and asks again, and reads `--concurrency=N` pages at once.
 ```sh
 just market audit --departments=books,electronics --products=50
 just market audit --departments=appliances --concurrency=2 --pause=2000
+just market audit --fix                   # rescan every record, and square it
+just market audit --fix --images=0        # square the rows, fetch no images
 ```

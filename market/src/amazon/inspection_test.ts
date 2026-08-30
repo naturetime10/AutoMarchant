@@ -188,6 +188,63 @@ test("an audit checks the records it has been longest since checking", async () 
   });
 });
 
+test("an audit asked to fix writes the page over the record it disagreed with", async () => {
+  await auditing(async (catalog, audit) => {
+    await catalog.save(product("B000000001"));
+
+    await audit(
+      new Pages({
+        B000000001: {
+          price: { amount: 9.99, currency: "USD", text: "$9.99" },
+          capturedAt: "2026-09-01T00:00:00.000Z",
+        },
+      }),
+      "--fix",
+    );
+
+    assertEquals(await query("SELECT price FROM products"), [{ price: 9.99 }]);
+    assertEquals(await verdicts(), [{ asin: "B000000001", verdict: "fixed" }]);
+    // What was put right is kept: the finding says what the record used to
+    // say, and the reading joins the price series like any other.
+    assertEquals(
+      await query("SELECT field, stored, found FROM audit_differences"),
+      [{ field: "price", stored: "12.99", found: "9.99" }],
+    );
+    assertEquals(
+      await query("SELECT price FROM captures ORDER BY captured_at"),
+      [{ price: 12.99 }, { price: 9.99 }],
+    );
+  });
+});
+
+test("an audit not asked to fix leaves the record as it found it", async () => {
+  await auditing(async (catalog, audit) => {
+    await catalog.save(product("B000000001"));
+
+    await audit(
+      new Pages({
+        B000000001: { price: { amount: 9.99, currency: "USD", text: "$9.99" } },
+      }),
+    );
+
+    assertEquals(await query("SELECT price FROM products"), [{ price: 12.99 }]);
+  });
+});
+
+test("a record with no page behind it is not one a fix can put right", async () => {
+  await auditing(async (catalog, audit) => {
+    await catalog.save(product("B000000001"));
+
+    await audit(new Pages({}, ["B000000001"]), "--fix");
+
+    // Nothing came back to write, so the record stands and says so.
+    assertEquals(await verdicts(), [{ asin: "B000000001", verdict: "gone" }]);
+    assertEquals(await query("SELECT title FROM products"), [
+      { title: "A cable" },
+    ]);
+  });
+});
+
 test("an audit leaves the records of other departments alone", async () => {
   await auditing(async (catalog, audit) => {
     await catalog.save(product("B000000001"));
@@ -213,6 +270,27 @@ test("an audit says what it made of the department it checked", async () => {
     assertEquals(
       said.filter((line) => line.includes("checked")),
       ["  electronics: 3 checked, 1 differs, 1 gone"],
+    );
+  });
+});
+
+test("an audit that fixes says so, rather than saying what still differs", async () => {
+  await auditing(async (catalog, audit, said) => {
+    await catalog.save(product("B000000001"));
+    await catalog.save(product("B000000002"));
+
+    await audit(
+      new Pages({ B000000002: { title: "A braided cable" } }),
+      "--fix",
+    );
+
+    assertEquals(
+      said.filter((line) => line.includes("checked")),
+      ["  electronics: 2 checked, 1 fixed, 0 gone"],
+    );
+    assertEquals(
+      said.filter((line) => line.includes("B000000002")),
+      ["    B000000002  fixed: title"],
     );
   });
 });

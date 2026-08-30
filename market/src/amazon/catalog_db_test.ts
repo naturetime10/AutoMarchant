@@ -740,3 +740,47 @@ test("CatalogDb hands back a record in the columns' own order", async () => {
     assertEquals(await db.record("B000000002"), undefined);
   });
 });
+
+test("CatalogDb makes one category of a rank's row and the trail reaching it", async () => {
+  await inDb(async (db) => {
+    // A trail names the category before any link says which node it is.
+    await db.save(
+      product("B000000001", { breadcrumbs: trail("Books", "Breeds") }),
+      [],
+    );
+    // A rank meets the same category under Amazon's other name for it, with
+    // the node attached, and it sits at the top until a trail places it.
+    await db.save(
+      product("B000000002", {
+        breadcrumbs: [],
+        ranked: [{ name: "Cat Breeds (Books)", node: "5046" }],
+      }),
+      [],
+    );
+    // Now a trail walks through it with the node on the link: the row the
+    // rank left and the row the trail made are the one category.
+    await db.save(
+      product("B000000003", {
+        breadcrumbs: [{ name: "Books" }, { name: "Breeds", node: "5046" }],
+      }),
+      [],
+    );
+
+    assertEquals(await tree(), [
+      { name: "Books", parent: null },
+      { name: "Breeds", parent: "Books" },
+    ]);
+    // The row that stays takes the node with it, so the next rank to name it
+    // finds the category where the tree hangs it.
+    assertEquals(
+      await query("SELECT name, node FROM categories WHERE node IS NOT NULL"),
+      [{ name: "Breeds", node: "5046" }],
+    );
+    // Every product that reached it by either name is filed under the one row.
+    assertEquals(await under("Books > Breeds"), [
+      "B000000001",
+      "B000000002",
+      "B000000003",
+    ]);
+  });
+});

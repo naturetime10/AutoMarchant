@@ -87,6 +87,16 @@ Deno.test("audit settings check every department by default", () => {
   assertEquals(settings.databaseUrl, DEFAULTS.databaseUrl);
   assertEquals(settings.concurrency, 5);
   assertEquals(settings.pauseMs, 1200);
+  // An audit reads and reports until it is asked to do otherwise.
+  assertEquals(settings.fix, false);
+  assertEquals(settings.imageLimit, Number.POSITIVE_INFINITY);
+});
+
+Deno.test("audit settings write the page over the record when asked to fix", () => {
+  const settings = AuditSettings.parse(["--fix", "--images=0"], DEFAULTS);
+
+  assertEquals(settings.fix, true);
+  assertEquals(settings.imageLimit, 0);
 });
 
 Deno.test("audit settings narrow the check to the flags given", () => {
