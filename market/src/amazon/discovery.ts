@@ -1,6 +1,7 @@
 import type { BrowserContext, Page } from "playwright";
 import { Budget, WorkerPool } from "../concurrency.ts";
 import { Catalog } from "./catalog.ts";
+import type { Diagnostics } from "./diagnostics.ts";
 import {
   type Department,
   DEPARTMENTS,
@@ -148,6 +149,7 @@ export class Discovery {
     private readonly urls: AmazonUrls,
     private readonly settings: DiscoverySettings,
     private readonly log: RunLog,
+    private readonly diagnostics: Diagnostics,
   ) {}
 
   async run(): Promise<void> {
@@ -161,6 +163,7 @@ export class Discovery {
       this.settings,
       this.urls,
       this.log,
+      this.diagnostics,
     );
     try {
       const walk = new Walk(this.settings, tabs, catalog, this.log);
@@ -349,10 +352,13 @@ class Tabs implements Pages {
     settings: DiscoverySettings,
     urls: AmazonUrls,
     log: RunLog,
+    diagnostics: Diagnostics,
   ): Promise<Tabs> {
     const tabs: Tab[] = [];
     for (let index = 0; index < settings.concurrency; index++) {
-      tabs.push(new Tab(await context.newPage(), urls, settings, log));
+      tabs.push(
+        new Tab(await context.newPage(), urls, settings, log, diagnostics),
+      );
     }
     return new Tabs(tabs);
   }
@@ -384,6 +390,7 @@ class Tab implements Reader {
     private readonly urls: AmazonUrls,
     private readonly settings: DiscoverySettings,
     private readonly log: RunLog,
+    private readonly diagnostics: Diagnostics,
   ) {
     this.results = new SearchResultsPage(page);
     this.product = new ProductPage(page);
@@ -453,6 +460,9 @@ class Tab implements Reader {
 
     const block = await this.gate.block();
     if (block !== "none") {
+      // The tabs are closed as the walk unwinds, so what Amazon served is
+      // recorded here, while the page that would not come is still open.
+      await this.diagnostics.save(this.page);
       throw new Error(`${BLOCK_REASON[block]} for ${url}, and kept serving it`);
     }
   }
