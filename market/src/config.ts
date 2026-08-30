@@ -16,6 +16,8 @@ export class Config {
   readonly outputDir: string;
   /** The Postgres database the catalog is kept in. */
   readonly databaseUrl: string;
+  /** How many product pages a walk reads at once, a browser tab each. */
+  readonly tabs: number;
 
   constructor(env: Pick<Deno.Env, "get"> = Deno.env) {
     this.email = Config.require(env, "AMAZON_EMAIL");
@@ -28,6 +30,22 @@ export class Config {
       "postgresql://localhost:5432/automerchant";
     this.outputDir = env.get("OUTPUT_DIR")?.trim() ||
       "../output/market/discover";
+    this.tabs = Config.count(env, "TABS", 1);
+  }
+
+  private static count(
+    env: Pick<Deno.Env, "get">,
+    name: string,
+    fallback: number,
+  ): number {
+    const value = env.get(name)?.trim();
+    if (!value) return fallback;
+
+    const parsed = Number(value);
+    if (!Number.isInteger(parsed) || parsed < 1) {
+      throw new Error(`${name} takes a whole number of at least 1.`);
+    }
+    return parsed;
   }
 
   private static require(env: Pick<Deno.Env, "get">, name: string): string {

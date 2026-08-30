@@ -55,10 +55,10 @@ export class DiscoverySettings {
     this.tabs = options.tabs ?? 1;
   }
 
-  /** Reads the flags `main.ts discover` was given. */
+  /** Reads the flags `main.ts discover` was given, over what .env set. */
   static parse(
     args: string[],
-    defaults: { outputDir: string; databaseUrl: string },
+    defaults: { outputDir: string; databaseUrl: string; tabs: number },
   ): DiscoverySettings {
     const options: DiscoveryOptions = { ...defaults };
 

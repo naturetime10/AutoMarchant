@@ -73,10 +73,11 @@ just market discover --departments=electronics --tabs=4
 a walk takes. Listing pages are still read one at a time and in order; it is
 the product pages behind them that are shared out, and each tab waits
 `--pause` between its own, so N tabs make roughly N times the requests a
-single tab did. One tab is the default — raise it a little at a time, since a
-walk that trips Amazon's bot checks costs more than the wait it saved. The
-catalog behind the tabs takes them one at a time, so a product still lands
-whole, and its CSV row with it.
+single tab did. One tab is the default, and `TABS` in `market/.env` sets a
+different one for every run; `--tabs=N` overrides that for a single walk.
+Raise it a little at a time, since a walk that trips Amazon's bot checks costs
+more than the wait it saved. The catalog behind the tabs takes them one at a
+time, so a product still lands whole, and its CSV row with it.
 
 Sign-in runs in a visible Chromium window by default — Amazon flags headless
 browsers. The session is kept in a persistent profile (`market/.playwright/`),

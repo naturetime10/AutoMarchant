@@ -5,6 +5,7 @@ import { DiscoverySettings } from "./discovery.ts";
 const DEFAULTS = {
   outputDir: "../output/market/discover",
   databaseUrl: "postgresql://localhost:5432/automerchant",
+  tabs: 1,
 };
 
 Deno.test("settings walk every department and every page by default", () => {
@@ -57,7 +58,12 @@ Deno.test("settings take an output directory of their own", () => {
 });
 
 Deno.test("settings read products in as many tabs as asked for", () => {
-  assertEquals(DiscoverySettings.parse(["--tabs=4"], DEFAULTS).tabs, 4);
+  assertEquals(DiscoverySettings.parse([], { ...DEFAULTS, tabs: 3 }).tabs, 3);
+  // The flag wins over what the environment set.
+  assertEquals(
+    DiscoverySettings.parse(["--tabs=4"], { ...DEFAULTS, tabs: 3 }).tabs,
+    4,
+  );
   assertThrows(
     () => DiscoverySettings.parse(["--tabs=0"], DEFAULTS),
     Error,

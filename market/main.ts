@@ -17,6 +17,7 @@ function task(args: string[], config: Config): Task {
       const settings = DiscoverySettings.parse(rest, {
         outputDir: config.outputDir,
         databaseUrl: config.databaseUrl,
+        tabs: config.tabs,
       });
       return (session) => session.discover(settings);
     }
