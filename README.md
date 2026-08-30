@@ -64,14 +64,30 @@ row of its own rather than being folded into a cell as JSON.
 
 A product's trail — `Home & Kitchen > Kitchen & Dining > Small Appliances >
 Blenders > Personal Size Blenders` — is a tree rather than a sentence, so it
-lives in `categories`: a row per node naming the parent it hangs from, with
-`products.category_id` pointing at the leaf. A branch that two trails share is
-one row, so what sits under `Kitchen & Dining` is a walk down `parent_id`
-rather than a match against a string, and the same column walks back up to read
-a trail out. A node's name is unique among its siblings and nowhere else, which
-is what lets `Accessories` sit under both `Electronics` and `Books` without the
-two being confused. A catalog that still holds its trails in a cell grows the
-tree from them the next time it is opened.
+lives in `categories`: a row per node naming the parent it hangs from. A branch
+that two trails share is one row, so what sits under `Kitchen & Dining` is a
+walk down `parent_id` rather than a match against a string, and the same column
+walks back up to read a trail out. A node's name is unique among its siblings
+and nowhere else, which is what lets `Accessories` sit under both `Electronics`
+and `Books` without the two being confused. A catalog that still holds its
+trails in a cell grows the tree from them the next time it is opened.
+
+A product sits in more than one of them, so which categories it is filed under
+is `product_categories` rather than a column. Its trail names one, and its
+Best Sellers Rank names the rest: *How to Talk to Your Cat About Gun Safety* is
+`Books > Crafts, Hobbies & Home > Pets & Animal Care > Cats > Breeds` by its
+trail, and `Cat Training` and `Animal Behavior & Communication` by its rank. A
+catalog that still files each product under one category folds that column into
+the table the next time it is opened.
+
+Amazon writes the same category differently in the two places — the book's rank
+calls its trail's own leaf `Cat Breeds (Books)`, where the trail calls it
+`Breeds` — so `categories.node` keeps the browse node behind each, which is
+Amazon's own name for it. Two rows are one category when the node says so. A
+rank names a category without saying where it hangs, so one met that way sits
+at the top of the tree, beside the departments, until a trail passes through it
+and says where it belongs. A catalog written before the node was read has none,
+and picks them up as its products are read again.
 
 ```sh
 psql "$DATABASE_URL" -c \
@@ -79,7 +95,9 @@ psql "$DATABASE_URL" -c \
      SELECT id FROM categories WHERE parent_id IS NULL AND name = 'Home & Kitchen'
      UNION ALL
      SELECT c.id FROM categories c JOIN sub ON c.parent_id = sub.id)
-   SELECT p.title, p.price FROM products p JOIN sub ON sub.id = p.category_id
+   SELECT DISTINCT p.title, p.price FROM products p
+     JOIN product_categories pc ON pc.asin = p.asin
+     JOIN sub ON sub.id = pc.category_id
    ORDER BY p.price"
 ```
 
