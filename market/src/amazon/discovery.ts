@@ -177,10 +177,11 @@ export class Discovery {
 }
 
 /**
- * One department, walked page by page: each listing page in turn, then the
- * products it ranks. Where the walk stopped is kept in the catalog, so the
- * next walk of the department opens the page this one was reading rather than
- * reading its way back down to it.
+ * One department, walked through the queue of what its listings have ranked.
+ * A listing page puts every product it names into the queue; the walk reads
+ * the queue, and a product leaves it only once it has been read. So a walk cut
+ * short picks up on the products it saw and never got to, wherever Amazon has
+ * since re-ranked them — or whether it still ranks them at all.
  */
 export class Walk {
   constructor(
@@ -190,48 +191,22 @@ export class Walk {
     private readonly log: RunLog,
   ) {}
 
-  /** Walks one department: each listing page in turn, then what it ranks. */
+  /** Walks one department: what an earlier walk queued, then what it lists. */
   async of(department: Department): Promise<void> {
     await this.log.info(`${department.name} -> ${this.catalog.label}`);
 
     const budget = new Budget(this.settings.maxProducts);
-    const first = await this.startOf(department);
-    // --pages caps the pages this run reads, not the page it may reach, so a
-    // resumed walk gets as many of them as a fresh one.
-    const last = first + this.settings.maxPages - 1;
-    if (first > 1) await this.log.info(`  picking up at page ${first}`);
-    let previous = "";
+    // A walk asks for a product once, however many listings rank it and
+    // however often the queue is read.
+    const tried = new Set<string>();
 
-    for (let page = first; page <= last; page++) {
-      const asins = await this.pages.list(department, page);
-      // Past the last page Amazon re-serves the previous one rather than 404.
-      const signature = asins.join(",");
-      if (asins.length === 0 || signature === previous) {
-        // The listings are walked out: the next walk starts at the top,
-        // where what has newly been ranked appears.
-        await this.catalog.forgetPlace(department.slug);
-        break;
-      }
-      previous = signature;
-
-      await this.log.info(`  page ${page}: ${asins.length} products`);
-      // The products a page ranks are read across every tab at once; a place
-      // is claimed before a page is opened, so the cap holds however many
-      // tabs are reading.
-      await this.pages.each(asins, async (asin, reader) => {
-        if (!budget.claim()) return;
-        if (!await this.capture(asin, department, reader)) {
-          budget.release();
-        }
-      });
-      // A budget spent partway through a page leaves the rest of it unread,
-      // so the walk stays on that page rather than stepping over it.
-      await this.catalog.keepPlace(
-        department.slug,
-        budget.spent ? page : page + 1,
-      );
-      if (budget.spent) break;
+    // A refresh takes its products from the pages it lists rather than from
+    // the queue, so it covers the pages it was asked for.
+    if (!this.settings.refresh) {
+      const queued = await this.catalog.unread(department.slug);
+      await this.read(department, budget, tried, queued);
     }
+    await this.list(department, budget, tried);
 
     await this.log.info(
       `  ${department.slug}: ${budget.claimed} new, ${await this.catalog.count(
@@ -240,13 +215,96 @@ export class Walk {
     );
   }
 
+  /** Lists page after page, reading what each one puts in the queue. */
+  private async list(
+    department: Department,
+    budget: Budget,
+    tried: Set<string>,
+  ): Promise<void> {
+    const first = await this.startOf(department);
+    // --pages caps the pages this run lists, not the page it may reach, so a
+    // resumed walk gets as many of them as a fresh one.
+    const last = first + this.settings.maxPages - 1;
+    if (first > 1) await this.log.info(`  listing from page ${first}`);
+    let previous = "";
+
+    for (let page = first; page <= last && !budget.spent; page++) {
+      const asins = await this.pages.list(department, page);
+      // Past the last page Amazon re-serves the previous one rather than 404.
+      const signature = asins.join(",");
+      if (asins.length === 0 || signature === previous) {
+        // The listings are listed out: the next walk starts at the top, where
+        // what has newly been ranked appears.
+        await this.catalog.forgetPlace(department.slug);
+        return;
+      }
+      previous = signature;
+
+      await this.log.info(`  page ${page}: ${asins.length} products`);
+      // The page is queued before a product of it is read, so the walk has no
+      // reason to open the page again: whatever it does not get to now is in
+      // the queue, and read by the walk after it.
+      await this.catalog.listed(department.slug, page, asins);
+      await this.catalog.keepPlace(department.slug, page + 1);
+      const due = this.settings.refresh
+        ? asins
+        : await this.catalog.unread(department.slug);
+      await this.read(department, budget, tried, due);
+    }
+  }
+
+  /** Reads the products given, as far as the budget for new ones goes. */
+  private async read(
+    department: Department,
+    budget: Budget,
+    tried: Set<string>,
+    due: readonly string[],
+  ): Promise<void> {
+    const queued = due.filter((asin) => !tried.has(asin));
+    if (queued.length === 0) return;
+    // What a walk reads before it has listed anything is what an earlier walk
+    // left behind; the rest is the page just listed, which said its own size.
+    if (tried.size === 0) {
+      await this.log.info(`  ${queued.length} queued by an earlier walk`);
+    }
+
+    // The queue is read across every tab at once; a place is claimed before a
+    // page is opened, so the cap holds however many tabs are reading, and
+    // given back by a product that turns out to be one the catalog has.
+    await this.pages.each(
+      this.upTo(queued, budget, tried),
+      async (asin, reader) => {
+        if (!budget.claim()) return;
+        if (!await this.capture(asin, department, reader)) budget.release();
+      },
+    );
+  }
+
   /**
-   * The page this walk opens with: where the last one stopped, so a walk cut
-   * short does not read its way back down the listings it has already read.
-   * A restart, and a refresh — which is there to read known products again —
-   * both start at the top instead.
+   * The queue, up to where the budget for new products runs out. It is handed
+   * out a product at a time rather than as a list, so a budget that fills
+   * while the tabs are reading stops the queue there.
+   */
+  private *upTo(
+    queued: readonly string[],
+    budget: Budget,
+    tried: Set<string>,
+  ): Generator<string> {
+    for (const asin of queued) {
+      if (budget.spent) return;
+      tried.add(asin);
+      yield asin;
+    }
+  }
+
+  /**
+   * The page this walk lists from: where the last one stopped, so a walk cut
+   * short does not page its way back down the listings it has already read
+   * into the queue. A restart, and a refresh — which is there to read known
+   * products again — both start at the top instead.
    */
   private async startOf(department: Department): Promise<number> {
+    if (this.settings.restart) await this.catalog.retryMissed(department.slug);
     if (this.settings.restart || this.settings.refresh) return 1;
     return await this.catalog.nextPage(department.slug);
   }
@@ -261,7 +319,12 @@ export class Walk {
     if (!this.settings.refresh && await this.catalog.has(asin)) return false;
 
     const product = await reader.read(asin, department);
-    if (!product) return false;
+    if (!product) {
+      // A page that would not load is asked for again by the next walk, and
+      // by the one after that, before the queue leaves it alone.
+      await this.catalog.missed(department.slug, asin);
+      return false;
+    }
 
     await this.catalog.save(product);
     await this.log.info(`    ${asin}  ${product.title ?? "(untitled)"}`);

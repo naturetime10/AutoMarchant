@@ -27,8 +27,13 @@ const DEFAULTS = {
  */
 class Listings implements Pages, Reader {
   readonly opened: number[] = [];
+  readonly readers: string[] = [];
 
-  constructor(private readonly pages: Record<number, string[]>) {}
+  constructor(
+    private readonly pages: Record<number, string[]>,
+    /** The products whose page will not load, however often it is asked for. */
+    private readonly missing: readonly string[] = [],
+  ) {}
 
   list(_department: Department, page: number): Promise<string[]> {
     this.opened.push(page);
@@ -43,6 +48,8 @@ class Listings implements Pages, Reader {
   }
 
   read(asin: string, department: Department): Promise<Product | undefined> {
+    this.readers.push(asin);
+    if (this.missing.includes(asin)) return Promise.resolve(undefined);
     return Promise.resolve({
       asin,
       url: `https://www.amazon.com/dp/${asin}`,
@@ -65,12 +72,11 @@ class Listings implements Pages, Reader {
 
 /** A walk of Electronics over the listings given, on the test database. */
 const walking = async (
-  pages: Record<number, string[]>,
+  listings: Listings,
   options: string[],
   body: (listings: Listings, catalog: Catalog) => Promise<void>,
 ) => {
   const dir = await Deno.makeTempDir();
-  const listings = new Listings(pages);
   const catalog = await Catalog.open(
     dir,
     TEST_DATABASE_URL,
@@ -91,61 +97,189 @@ test("a walk opens the page the last walk of the department stopped on", async (
   await truncate();
   const pages = { 3: ["B000000031"], 4: ["B000000041"] };
 
-  await walking(pages, ["--pages=2"], async (listings, catalog) => {
-    // Nothing kept yet, so the first walk starts at the top.
-    assertEquals(listings.opened, [1]);
-    await catalog.keepPlace("electronics", 3);
-  });
+  await walking(
+    new Listings(pages),
+    ["--pages=2"],
+    async (listings, catalog) => {
+      // Nothing kept yet, so the first walk starts at the top.
+      assertEquals(listings.opened, [1]);
+      await catalog.keepPlace("electronics", 3);
+    },
+  );
 
-  await walking(pages, ["--pages=2"], async (listings, catalog) => {
-    assertEquals(listings.opened, [3, 4]);
-    // Both pages were read through, so the next walk opens the one after.
-    assertEquals(await catalog.nextPage("electronics"), 5);
-  });
+  await walking(
+    new Listings(pages),
+    ["--pages=2"],
+    async (listings, catalog) => {
+      assertEquals(listings.opened, [3, 4]);
+      // Both pages were read through, so the next walk opens the one after.
+      assertEquals(await catalog.nextPage("electronics"), 5);
+    },
+  );
 });
 
-test("a walk out of products stays on the page it was reading", async () => {
+test("a walk out of products leaves the rest of the page queued", async () => {
   await truncate();
   const pages = { 1: ["B000000011", "B000000012", "B000000013"] };
 
-  await walking(pages, ["--products=2"], async (_listings, catalog) => {
-    // Two of the three were read, so the page is not walked out yet.
-    assertEquals(await catalog.nextPage("electronics"), 1);
-    assertEquals(await catalog.count("electronics"), 2);
-  });
+  await walking(
+    new Listings(pages),
+    ["--products=2"],
+    async (_listings, catalog) => {
+      assertEquals(await catalog.count("electronics"), 2);
+      // The page has been listed, so the walk has no reason to open it again:
+      // what it did not get to is in the queue rather than on the page.
+      assertEquals(await catalog.nextPage("electronics"), 2);
+      assertEquals(await catalog.unread("electronics"), ["B000000013"]);
+    },
+  );
+});
+
+test("a walk reads what an earlier one listed and never got to", async () => {
+  await truncate();
+  const first = { 1: ["B000000011", "B000000012", "B000000013"] };
+
+  await walking(new Listings(first), ["--products=1"], () => Promise.resolve());
+
+  // Amazon has re-ranked the department since: the two products the first
+  // walk left unread are nowhere in the listings the second one is served.
+  const second = { 1: ["B000000021"], 2: ["B000000022"] };
+  await walking(
+    new Listings(second),
+    ["--pages=1"],
+    async (listings, catalog) => {
+      // The queue is read first, and in the order the listings ranked it;
+      // then the walk carries on listing where the first one stopped.
+      assertEquals(listings.readers, [
+        "B000000012",
+        "B000000013",
+        "B000000022",
+      ]);
+      assertEquals(await catalog.unread("electronics"), []);
+    },
+  );
+});
+
+test("a walk gives up on a listing whose page will not load", async () => {
+  await truncate();
+  const pages = { 1: ["B000000011"] };
+  const dead = ["B000000011"];
+
+  for (let walk = 1; walk <= 3; walk++) {
+    await walking(
+      new Listings(pages, dead),
+      ["--pages=1"],
+      () => Promise.resolve(),
+    );
+  }
+
+  // Three walks have asked for it and been given nothing, so a fourth reads
+  // past it rather than opening it ahead of everything else again.
+  await walking(
+    new Listings(pages, dead),
+    ["--pages=1"],
+    (listings) => {
+      assertEquals(listings.readers, []);
+      return Promise.resolve();
+    },
+  );
+
+  // A restart is what asks again.
+  await walking(
+    new Listings(pages, dead),
+    ["--pages=1", "--restart"],
+    (listings) => {
+      assertEquals(listings.readers, ["B000000011"]);
+      return Promise.resolve();
+    },
+  );
 });
 
 test("a walk that reads a page through steps over it", async () => {
   await truncate();
   const pages = { 1: ["B000000011"], 2: ["B000000021"] };
 
-  await walking(pages, ["--pages=1"], async (_listings, catalog) => {
-    assertEquals(await catalog.nextPage("electronics"), 2);
-  });
+  await walking(
+    new Listings(pages),
+    ["--pages=1"],
+    async (_listings, catalog) => {
+      assertEquals(await catalog.nextPage("electronics"), 2);
+    },
+  );
 });
 
 test("a walk to the end of the listings forgets where it was", async () => {
   await truncate();
 
-  await walking({ 1: ["B000000011"] }, [], async (listings, catalog) => {
-    // Page 2 ranks nothing, which is how the listings end.
-    assertEquals(listings.opened, [1, 2]);
-    // So the next walk starts at the top, where a listing puts what it has
-    // newly ranked.
-    assertEquals(await catalog.nextPage("electronics"), 1);
-  });
+  await walking(
+    new Listings({ 1: ["B000000011"] }),
+    [],
+    async (listings, catalog) => {
+      // Page 2 ranks nothing, which is how the listings end.
+      assertEquals(listings.opened, [1, 2]);
+      // So the next walk starts at the top, where a listing puts what it has
+      // newly ranked.
+      assertEquals(await catalog.nextPage("electronics"), 1);
+    },
+  );
 });
 
 test("a restart walks the department from the top again", async () => {
   await truncate();
   const pages = { 1: ["B000000011"], 5: ["B000000051"] };
 
-  await walking(pages, ["--pages=1"], async (_listings, catalog) => {
-    await catalog.keepPlace("electronics", 5);
-  });
+  await walking(
+    new Listings(pages),
+    ["--pages=1"],
+    async (_listings, catalog) => {
+      await catalog.keepPlace("electronics", 5);
+    },
+  );
 
-  await walking(pages, ["--pages=1", "--restart"], (listings) => {
+  await walking(new Listings(pages), ["--pages=1", "--restart"], (listings) => {
     assertEquals(listings.opened, [1]);
     return Promise.resolve();
   });
+});
+
+test("a walk spends its budget on products, not on pages that will not load", async () => {
+  await truncate();
+  const pages = { 1: ["B000000011", "B000000012", "B000000013"] };
+
+  await walking(
+    new Listings(pages, ["B000000011"]),
+    ["--products=2"],
+    async (listings, catalog) => {
+      // The first would not load, so it costs the budget nothing: the two
+      // products asked for are the two that were read.
+      assertEquals(listings.readers, [
+        "B000000011",
+        "B000000012",
+        "B000000013",
+      ]);
+      assertEquals(await catalog.count("electronics"), 2);
+    },
+  );
+});
+
+test("a refresh reads the pages it lists, not the queue", async () => {
+  await truncate();
+  const pages = { 1: ["B000000011", "B000000012"] };
+
+  await walking(
+    new Listings(pages),
+    ["--products=1", "--pages=1"],
+    () => Promise.resolve(),
+  );
+
+  // A refresh is there to read known products again, so it covers the page it
+  // was asked for rather than only what the first walk never got to.
+  await walking(
+    new Listings(pages),
+    ["--refresh", "--pages=1"],
+    (listings) => {
+      assertEquals(listings.readers, ["B000000011", "B000000012"]);
+      return Promise.resolve();
+    },
+  );
 });

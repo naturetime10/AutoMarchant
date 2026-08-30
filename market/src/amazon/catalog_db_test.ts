@@ -515,6 +515,63 @@ test("CatalogDb grows a tree from the trail a string held", async () => {
   assertEquals((await columnsOf("products")).includes("breadcrumbs"), false);
 });
 
+test("CatalogDb queues what a listing page ranked, in the order it ranked it", async () => {
+  await inDb(async (db) => {
+    await db.listed("electronics", 1, ["B000000011", "B000000012"]);
+    await db.listed("electronics", 2, ["B000000021"]);
+
+    assertEquals(await db.unread("electronics"), [
+      "B000000011",
+      "B000000012",
+      "B000000021",
+    ]);
+    // Each department queues its own listings.
+    assertEquals(await db.unread("books"), []);
+  });
+});
+
+test("CatalogDb takes a product it has read out of the queue", async () => {
+  await inDb(async (db) => {
+    await db.listed("electronics", 1, ["B000000011", "B000000012"]);
+    await db.save(product("B000000011"), []);
+
+    assertEquals(await db.unread("electronics"), ["B000000012"]);
+  });
+});
+
+test("CatalogDb queues a product a later listing re-ranked, once", async () => {
+  await inDb(async (db) => {
+    await db.listed("electronics", 1, ["B000000011", "B000000012"]);
+    // A rerun of the listings ranks the second product on a page of its own.
+    await db.listed("electronics", 4, ["B000000012"]);
+
+    // It is still queued, and now behind what page 1 ranks.
+    assertEquals(await db.unread("electronics"), [
+      "B000000011",
+      "B000000012",
+    ]);
+  });
+});
+
+test("CatalogDb drops a listing that never reads, and takes it back on", async () => {
+  await inDb(async (db) => {
+    await db.listed("electronics", 1, ["B000000011"]);
+
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await db.missed("electronics", "B000000011");
+      assertEquals(await db.unread("electronics"), ["B000000011"]);
+    }
+
+    // A page that has not loaded three times over is left out of the queue,
+    // so a walk stops opening it ahead of everything else.
+    await db.missed("electronics", "B000000011");
+    assertEquals(await db.unread("electronics"), []);
+
+    await db.retryMissed("electronics");
+    assertEquals(await db.unread("electronics"), ["B000000011"]);
+  });
+});
+
 test("CatalogDb keeps the page a walk stopped on", async () => {
   await inDb(async (db) => {
     // A department never walked starts at the top of its listings.

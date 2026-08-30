@@ -111,10 +111,30 @@ const SCHEMA = `
   -- rather than carried: a walk of Clothing can say what those carousels hold.
   DROP TABLE IF EXISTS styling_ideas;
 
-  -- Where a walk of a department stopped, so the next one opens the page it
-  -- was on rather than reading its way back down from the top. A department
-  -- walked end to end keeps no row: its next walk starts at the listings'
-  -- first page, which is where what has newly been ranked appears.
+  -- What a department's listings ranked, page by page: the queue a walk works
+  -- through. A product joins it the moment a listing names it and leaves it
+  -- once it has been read, so a walk cut short resumes on the products it saw
+  -- and never got to — wherever Amazon has re-ranked them to since, or
+  -- whether it still ranks them at all.
+  CREATE TABLE IF NOT EXISTS listings (
+    department TEXT NOT NULL,
+    asin TEXT NOT NULL,
+    page INTEGER NOT NULL,
+    position INTEGER NOT NULL,
+    -- Reads that came back with nothing. A product page that will not load is
+    -- asked for again by the next walk, but not by every walk thereafter.
+    attempts INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (department, asin)
+  );
+  -- The queue is read in the order the listings ranked it.
+  CREATE INDEX IF NOT EXISTS listings_rank
+    ON listings (department, page, position);
+
+  -- How far a department's listings have been read into the queue, so the
+  -- next walk lists the page after rather than paging its way back down from
+  -- the top. A department listed end to end keeps no row: its next walk
+  -- starts at the first page, which is where what has newly been ranked
+  -- appears.
   CREATE TABLE IF NOT EXISTS walks (
     department TEXT PRIMARY KEY,
     next_page INTEGER NOT NULL
@@ -184,10 +204,18 @@ export const TABLES = {
     "rating_count",
     "availability",
   ],
+  listings: ["department", "asin", "page", "position", "attempts"],
   walks: ["department", "next_page"],
 } as const;
 
 export type TableName = keyof typeof TABLES;
+
+/**
+ * How often a product page is asked for, over as many walks, before the queue
+ * leaves it alone. A page that will not load is usually a product Amazon has
+ * taken down, and a walk that retries those first spends every run on them.
+ */
+const MAX_ATTEMPTS = 3;
 
 /** The tables a product owns, cleared before it is written again. */
 const OWNED: TableName[] = [
@@ -354,7 +382,55 @@ export class CatalogDb {
     return rows[0][0];
   }
 
-  /** The listing page a walk of this department should open next. */
+  /** Queues what one listing page ranked, in the order it ranked them. */
+  async listed(
+    department: string,
+    page: number,
+    asins: readonly string[],
+  ): Promise<void> {
+    if (asins.length === 0) return;
+    // A product the listings rank a second time keeps the row it already has,
+    // and with it the reads that row has been given.
+    await this.client.queryArray(
+      `INSERT INTO listings (department, asin, page, position)
+       SELECT $1, listed.asin, $2, listed.position
+       FROM unnest($3::text[]) WITH ORDINALITY AS listed(asin, position)
+       ON CONFLICT (department, asin)
+       DO UPDATE SET page = excluded.page, position = excluded.position`,
+      [department, page, asins],
+    );
+  }
+
+  /** What this department's listings ranked and no walk has read yet. */
+  async unread(department: string): Promise<string[]> {
+    const { rows } = await this.client.queryArray<[string]>(
+      `SELECT l.asin FROM listings l
+       LEFT JOIN products p ON p.asin = l.asin
+       WHERE l.department = $1 AND p.asin IS NULL AND l.attempts < $2
+       ORDER BY l.page, l.position`,
+      [department, MAX_ATTEMPTS],
+    );
+    return rows.map(([asin]) => asin);
+  }
+
+  /** Counts a read of a queued product that came back with nothing. */
+  async missed(department: string, asin: string): Promise<void> {
+    await this.client.queryArray(
+      `UPDATE listings SET attempts = attempts + 1
+       WHERE department = $1 AND asin = $2`,
+      [department, asin],
+    );
+  }
+
+  /** Gives every listing this department gave up on another chance. */
+  async retryMissed(department: string): Promise<void> {
+    await this.client.queryArray(
+      "UPDATE listings SET attempts = 0 WHERE department = $1",
+      [department],
+    );
+  }
+
+  /** The listing page a walk of this department should list next. */
   async nextPage(department: string): Promise<number> {
     const { rows } = await this.client.queryArray<[number]>(
       "SELECT next_page FROM walks WHERE department = $1",

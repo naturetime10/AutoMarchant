@@ -42,7 +42,31 @@ export class Catalog {
     return this.turns.run(() => this.db.count(department));
   }
 
-  /** The listing page a walk of this department should open next. */
+  /** Queues what one listing page ranked, in the order it ranked them. */
+  listed(
+    department: string,
+    page: number,
+    asins: readonly string[],
+  ): Promise<void> {
+    return this.turns.run(() => this.db.listed(department, page, asins));
+  }
+
+  /** What this department's listings ranked and no walk has read yet. */
+  unread(department: string): Promise<string[]> {
+    return this.turns.run(() => this.db.unread(department));
+  }
+
+  /** Counts a read of a queued product that came back with nothing. */
+  missed(department: string, asin: string): Promise<void> {
+    return this.turns.run(() => this.db.missed(department, asin));
+  }
+
+  /** Gives every listing this department gave up on another chance. */
+  retryMissed(department: string): Promise<void> {
+    return this.turns.run(() => this.db.retryMissed(department));
+  }
+
+  /** The listing page a walk of this department should list next. */
   nextPage(department: string): Promise<number> {
     return this.turns.run(() => this.db.nextPage(department));
   }
