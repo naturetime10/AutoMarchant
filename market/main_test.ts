@@ -1,45 +1,64 @@
-import { assertEquals, assertRejects } from "@std/assert";
-import { totp } from "./src/totp.ts";
-import { loadConfig } from "./src/config.ts";
+import { assertEquals, assertRejects, assertThrows } from "@std/assert";
+import { Config } from "./src/config.ts";
+import { OtpSource, PromptOtpSource, TotpSource } from "./src/otp.ts";
+
+const env = (values: Record<string, string>) => ({
+  get: (key: string): string | undefined => values[key],
+});
+
+const credentials = {
+  AMAZON_EMAIL: "shopper@example.com",
+  AMAZON_PASSWORD: "hunter2",
+};
 
 // RFC 6238 appendix B: ASCII secret "12345678901234567890" in base32.
 const RFC_SECRET = "GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ";
+const at = (millis: number) => new TotpSource(RFC_SECRET, () => millis);
 
-Deno.test("totp matches the RFC 6238 test vectors", async () => {
-  assertEquals(await totp(RFC_SECRET, 59_000), "287082");
-  assertEquals(await totp(RFC_SECRET, 1_111_111_109_000), "081804");
-  assertEquals(await totp(RFC_SECRET, 1_234_567_890_000), "005924");
-});
+Deno.test("Config reads credentials and applies defaults", () => {
+  const config = new Config(env(credentials));
 
-Deno.test("totp tolerates spaces and padding in the secret", async () => {
-  assertEquals(await totp("gezd gnbv gy3t qojq gezd gnbv gy3t qojq=", 59_000), "287082");
-});
-
-Deno.test("totp rejects a malformed secret", async () => {
-  await assertRejects(() => totp("not-base32!", 0), Error, "Invalid base32");
-});
-
-Deno.test("loadConfig reads credentials and defaults", () => {
-  Deno.env.set("AMAZON_EMAIL", "shopper@example.com");
-  Deno.env.set("AMAZON_PASSWORD", "hunter2");
-  Deno.env.delete("AMAZON_TOTP_SECRET");
-  Deno.env.delete("HEADLESS");
-
-  const config = loadConfig();
-  assertEquals(config.credentials.email, "shopper@example.com");
-  assertEquals(config.credentials.totpSecret, undefined);
+  assertEquals(config.email, "shopper@example.com");
+  assertEquals(config.password, "hunter2");
+  assertEquals(config.totpSecret, undefined);
   assertEquals(config.headless, false);
   assertEquals(config.userDataDir, ".playwright/amazon");
 });
 
-Deno.test("loadConfig fails loudly without credentials", () => {
-  Deno.env.delete("AMAZON_EMAIL");
-  Deno.env.delete("AMAZON_PASSWORD");
+Deno.test("Config fails loudly without credentials", () => {
+  assertThrows(() => new Config(env({})), Error, "AMAZON_EMAIL");
+});
 
-  try {
-    loadConfig();
-    throw new Error("expected loadConfig to throw");
-  } catch (error) {
-    assertEquals((error as Error).message.includes("AMAZON_EMAIL"), true);
-  }
+Deno.test("OtpSource uses the secret when there is one, else the prompt", () => {
+  const withSecret = new Config(
+    env({ ...credentials, AMAZON_TOTP_SECRET: RFC_SECRET }),
+  );
+
+  assertEquals(OtpSource.from(withSecret) instanceof TotpSource, true);
+  assertEquals(
+    OtpSource.from(new Config(env(credentials))) instanceof PromptOtpSource,
+    true,
+  );
+});
+
+Deno.test("TotpSource matches the RFC 6238 test vectors", async () => {
+  assertEquals(await at(59_000).code(), "287082");
+  assertEquals(await at(1_111_111_109_000).code(), "081804");
+  assertEquals(await at(1_234_567_890_000).code(), "005924");
+});
+
+Deno.test("TotpSource tolerates spaces and padding in the secret", async () => {
+  const spaced = new TotpSource(
+    "gezd gnbv gy3t qojq gezd gnbv gy3t qojq=",
+    () => 59_000,
+  );
+  assertEquals(await spaced.code(), "287082");
+});
+
+Deno.test("TotpSource rejects a malformed secret", async () => {
+  await assertRejects(
+    () => new TotpSource("not-base32!").code(),
+    Error,
+    "Invalid base32",
+  );
 });
