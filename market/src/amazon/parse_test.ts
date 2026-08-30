@@ -3,6 +3,7 @@ import {
   asinFromUrl,
   cleanText,
   parseCount,
+  parseDate,
   parseMoney,
   parseRating,
 } from "./parse.ts";
@@ -43,6 +44,27 @@ Deno.test("parseMoney splits the amount from its currency", () => {
   });
   assertEquals(parseMoney("12.99"), { amount: 12.99, text: "12.99" });
   assertEquals(parseMoney("Currently unavailable"), undefined);
+});
+
+Deno.test("parseDate reads the day out of the line a review dates itself by", () => {
+  assertEquals(
+    parseDate("Reviewed in the United States on May 1, 2024"),
+    "2024-05-01T00:00:00.000Z",
+  );
+  assertEquals(
+    parseDate("Reviewed in the United Kingdom on 1 May 2024"),
+    "2024-05-01T00:00:00.000Z",
+  );
+  assertEquals(
+    parseDate("Reviewed in Canada on Sept. 12, 2023"),
+    "2023-09-12T00:00:00.000Z",
+  );
+  assertEquals(parseDate("Reviewed in the United States"), undefined);
+  assertEquals(
+    parseDate("Reviewed in the United States on Maybe 1, 2024"),
+    undefined,
+  );
+  assertEquals(parseDate(null), undefined);
 });
 
 Deno.test("asinFromUrl finds the identifier in every product link shape", () => {

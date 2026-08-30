@@ -339,6 +339,62 @@ test("CatalogDb leaves a storefront byline where it is", async () => {
   );
 });
 
+test("CatalogDb keeps the day a review was written as a moment in time", async () => {
+  await inDb(async (db) => {
+    await db.save(
+      product("B000000001", {
+        reviews: [
+          { verifiedPurchase: true, date: "2024-05-01T00:00:00.000Z" },
+          { verifiedPurchase: true },
+        ],
+      }),
+      [],
+    );
+
+    const rows = await query<{ position: number; date: Date | null }>(
+      "SELECT position, date FROM reviews ORDER BY position",
+    );
+
+    assertEquals(rows[0].date?.toISOString(), "2024-05-01T00:00:00.000Z");
+    assertEquals(rows[1].date, null);
+  });
+});
+
+test("CatalogDb reads a review date an earlier walk wrote in words", async () => {
+  await truncate();
+  // A catalog as an earlier walk left it: the day a review names kept as the
+  // words the page wrote it in.
+  const legacy = await CatalogDb.open(TEST_DATABASE_URL);
+  await legacy.close();
+  await query("ALTER TABLE reviews ALTER COLUMN date TYPE TEXT");
+  await query(
+    `INSERT INTO products (asin, url, department, captured_at)
+     VALUES ('B000000001', '', 'electronics', now())`,
+  );
+  await query(
+    `INSERT INTO reviews (asin, position, date, verified_purchase)
+     VALUES ('B000000001', 1, 'May 1, 2024', true),
+            ('B000000001', 2, 'Reviewed nowhere in particular', true),
+            ('B000000001', 3, NULL, true)`,
+  );
+
+  const db = await CatalogDb.open(TEST_DATABASE_URL);
+  await db.close();
+
+  assertEquals(
+    await query(
+      // Read back in UTC, the zone the day was written down in.
+      "SELECT position, to_char(date AT TIME ZONE 'UTC', 'YYYY-MM-DD') AS day " +
+        "FROM reviews ORDER BY position",
+    ),
+    [
+      { position: 1, day: "2024-05-01" },
+      { position: 2, day: null },
+      { position: 3, day: null },
+    ],
+  );
+});
+
 test("CatalogDb files a product under the leaf of its trail", async () => {
   await inDb(async (db) => {
     await db.save(product("B000000001", { breadcrumbs: BLENDERS }), []);

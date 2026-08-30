@@ -56,6 +56,51 @@ export function parseMoney(value?: string | null): Money | undefined {
   };
 }
 
+/** The months as Amazon writes them, in full and in the short forms. */
+const MONTHS = [
+  ["january", "jan"],
+  ["february", "feb"],
+  ["march", "mar"],
+  ["april", "apr"],
+  ["may"],
+  ["june", "jun"],
+  ["july", "jul"],
+  ["august", "aug"],
+  ["september", "sept", "sep"],
+  ["october", "oct"],
+  ["november", "nov"],
+  ["december", "dec"],
+];
+
+/** "1 May 2024", as the marketplaces outside the United States date a review. */
+const DAY_FIRST = /\b(\d{1,2})\s+([A-Za-z]+)\.?\s+(\d{4})\b/;
+/** "May 1, 2024". */
+const MONTH_FIRST = /\b([A-Za-z]+)\.?\s+(\d{1,2}),?\s+(\d{4})\b/;
+
+/**
+ * The day a line names, as an ISO timestamp: "Reviewed in the United States on
+ * May 1, 2024" becomes 2024-05-01. A page dates a review to the day, so the
+ * moment it answers with is that day's midnight, UTC.
+ */
+export function parseDate(value?: string | null): string | undefined {
+  const text = cleanText(value);
+  const dayFirst = text.match(DAY_FIRST);
+  const monthFirst = !dayFirst ? text.match(MONTH_FIRST) : null;
+  const [day, month, year] = dayFirst
+    ? [dayFirst[1], dayFirst[2], dayFirst[3]]
+    : monthFirst
+    ? [monthFirst[2], monthFirst[1], monthFirst[3]]
+    : [];
+  if (!month) return undefined;
+
+  const index = MONTHS.findIndex((names) =>
+    names.includes(month.toLowerCase())
+  );
+  if (index < 0) return undefined;
+
+  return new Date(Date.UTC(Number(year), index, Number(day))).toISOString();
+}
+
 /** The ASIN in any of the link shapes Amazon uses for a product. */
 export function asinFromUrl(url: string): string | undefined {
   return url.match(

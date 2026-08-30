@@ -2,6 +2,7 @@ import {
   cleanText,
   type Money,
   parseCount,
+  parseDate,
   parseMoney,
   parseRating,
 } from "./parse.ts";
@@ -27,6 +28,7 @@ export interface Review {
   title?: string;
   author?: string;
   rating?: number;
+  /** ISO timestamp of the day the review was written. */
   date?: string;
   verifiedPurchase: boolean;
   body?: string;
@@ -185,8 +187,8 @@ function toReview(raw: RawReview): Review {
     ),
     ...optional("author", cleanText(raw.author)),
     ...optionalValue("rating", parseRating(raw.ratingText)),
-    // "Reviewed in the United States on May 1, 2024" — keep the date only.
-    ...optional("date", cleanText(raw.date).replace(/^.*\bon\s+/i, "")),
+    // "Reviewed in the United States on May 1, 2024" — keep the day only.
+    ...optionalValue("date", parseDate(raw.date)),
     verifiedPurchase: raw.verified,
     ...optional("body", cleanText(raw.body)),
     ...optionalValue("helpfulVotes", parseCount(raw.helpfulText)),
