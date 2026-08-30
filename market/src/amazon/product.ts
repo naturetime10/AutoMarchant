@@ -66,7 +66,6 @@ export interface Product {
   variations: Record<string, string>;
   style?: string;
   measurements: Record<string, string>;
-  stylingIdeas: string[];
   questions: Question[];
   reviews: Review[];
   description?: string;
@@ -105,7 +104,6 @@ export interface RawProduct {
   details: Array<[string, string]>;
   variations: Array<[string, string]>;
   measurements: Array<[string, string]>;
-  stylingIdeas: string[];
   questions: Array<
     { question: string; answer: string | null; votes: string | null }
   >;
@@ -166,7 +164,6 @@ export function toProduct(
     variations,
     ...optional("style", variations["Style"] ?? details["Style"] ?? ""),
     measurements: measurementsFrom(raw.measurements, details),
-    stylingIdeas: unique(texts(raw.stylingIdeas)),
     questions: raw.questions.map((entry) => ({
       question: cleanText(entry.question),
       ...optional("answer", cleanText(entry.answer)),

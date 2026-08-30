@@ -43,7 +43,7 @@ reachable; the database tests are skipped, with a warning, when it is not.
 
 `discover` walks each department's listings page by page and reads every
 product detail page it ranks — title, images, price, rating, store, details,
-style, measurements, styling ideas, questions, reviews, and description. A
+style, measurements, questions, reviews, and description. A
 book's byline names its author rather than a brand, so a book is filed under
 `author` and leaves `brand` and the store's name empty; a catalog written
 before that reads its books' bylines again the next time it is opened.

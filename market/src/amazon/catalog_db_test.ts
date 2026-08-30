@@ -20,7 +20,6 @@ const product = (asin: string, over: Partial<Product> = {}): Product => ({
   details: { Style: "Braided" },
   variations: { Color: "Black" },
   measurements: { Length: "6 ft" },
-  stylingIdeas: [],
   questions: [],
   reviews: [{ verifiedPurchase: true, rating: 5, title: "Good" }],
   ...over,
@@ -393,6 +392,21 @@ test("CatalogDb reads a review date an earlier walk wrote in words", async () =>
       { position: 3, day: null },
     ],
   );
+});
+
+test("CatalogDb drops the styling ideas no walk ever filled", async () => {
+  await truncate();
+  // A catalog as an earlier walk left it: a table for a fashion carousel that
+  // no product ever had anything to put in.
+  await query(
+    `CREATE TABLE IF NOT EXISTS styling_ideas (
+       asin TEXT NOT NULL, position INTEGER NOT NULL, idea TEXT NOT NULL)`,
+  );
+
+  const db = await CatalogDb.open(TEST_DATABASE_URL);
+  await db.close();
+
+  assertEquals(await columnsOf("styling_ideas"), []);
 });
 
 test("CatalogDb files a product under the leaf of its trail", async () => {

@@ -102,29 +102,6 @@ export class ProductPage {
         if (cells.length >= 2) measurements.push([cells[0], cells[1]]);
       }
 
-      // Styling ideas live in a carousel titled by a nearby heading.
-      const stylingIdeas: string[] = [];
-      for (
-        const heading of document.querySelectorAll(
-          "h1, h2, h3, .a-carousel-heading",
-        )
-      ) {
-        if (
-          !/styling ideas|complete the look|shop the look/i
-            .test(heading.textContent ?? "")
-        ) continue;
-        const section =
-          heading.closest("div[data-card-metrics-id], .a-cardui, section") ??
-            heading.parentElement;
-        for (
-          const item of section?.querySelectorAll("img[alt], a[title]") ?? []
-        ) {
-          const label = item.getAttribute("alt") ??
-            item.getAttribute("title") ?? "";
-          if (label.trim()) stylingIdeas.push(label);
-        }
-      }
-
       const questions: RawProduct["questions"] = [];
       for (
         const link of document.querySelectorAll(
@@ -237,7 +214,6 @@ export class ProductPage {
         details: rows,
         variations,
         measurements,
-        stylingIdeas,
         questions,
         reviews,
         description: one("#productDescription", "#bookDescription_feature_div"),

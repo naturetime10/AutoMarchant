@@ -24,7 +24,6 @@ const raw: RawProduct = {
   ],
   variations: [["Color:", "Black"], ["Style:", "Braided"]],
   measurements: [["Length", "6 ft"]],
-  stylingIdeas: ["Wear with a denim jacket", "Wear with a denim jacket"],
   questions: [
     { question: " Is it USB 3? ", answer: "Yes", votes: "3 votes" },
   ],
@@ -114,10 +113,6 @@ Deno.test("toProduct gathers measurements from the chart and the details", () =>
     "Length": "6 ft",
     "Product Dimensions": "6 x 4 x 1 inches; 3.2 Ounces",
   });
-});
-
-Deno.test("toProduct drops repeated styling ideas", () => {
-  assertEquals(product.stylingIdeas, ["Wear with a denim jacket"]);
 });
 
 Deno.test("toProduct counts the votes on an answered question", () => {
