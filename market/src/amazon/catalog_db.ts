@@ -1,4 +1,5 @@
 import { Client, type ClientOptions, Oid } from "@db/postgres";
+import type { Finding } from "./audit.ts";
 import type { StoredImage } from "./image_store.ts";
 import { parseDate } from "./parse.ts";
 import { type Category, type Product, readByline } from "./product.ts";
@@ -158,6 +159,31 @@ const SCHEMA = `
     next_page INTEGER NOT NULL
   );
 
+  -- What an audit made of a record: whether it still reads the way the page
+  -- behind it does. One row per product rather than a history of them — the
+  -- question an audit answers is which records are wrong now — and the row
+  -- goes when a walk writes the product again, because a record that has just
+  -- been read is one nobody has checked.
+  CREATE TABLE IF NOT EXISTS audits (
+    asin TEXT NOT NULL REFERENCES products (asin) ON DELETE CASCADE,
+    checked_at TIMESTAMPTZ NOT NULL,
+    verdict TEXT NOT NULL,
+    PRIMARY KEY (asin)
+  );
+  -- An audit takes the records it has been longest since checking first, and
+  -- those it has never checked before them.
+  CREATE INDEX IF NOT EXISTS audits_checked ON audits (checked_at);
+
+  -- Where a record and its page disagreed: the column, what the catalog
+  -- holds, and what the page says instead.
+  CREATE TABLE IF NOT EXISTS audit_differences (
+    asin TEXT NOT NULL REFERENCES audits (asin) ON DELETE CASCADE,
+    field TEXT NOT NULL,
+    stored TEXT,
+    found TEXT,
+    PRIMARY KEY (asin, field)
+  );
+
   CREATE TABLE IF NOT EXISTS captures (
     asin TEXT NOT NULL REFERENCES products (asin) ON DELETE CASCADE,
     captured_at TIMESTAMPTZ NOT NULL,
@@ -224,6 +250,8 @@ export const TABLES = {
   ],
   listings: ["department", "asin", "page", "position", "attempts"],
   walks: ["department", "next_page"],
+  audits: ["asin", "checked_at", "verdict"],
+  audit_differences: ["asin", "field", "stored", "found"],
 } as const;
 
 export type TableName = keyof typeof TABLES;
@@ -235,13 +263,18 @@ export type TableName = keyof typeof TABLES;
  */
 const MAX_ATTEMPTS = 3;
 
-/** The tables a product owns, cleared before it is written again. */
+/**
+ * The tables a product owns, cleared before it is written again. The audit of
+ * it goes with them: a record that has just been read is one no audit has
+ * looked at, whatever an audit made of what it used to say.
+ */
 const OWNED: TableName[] = [
   "attributes",
   "features",
   "images",
   "reviews",
   "questions",
+  "audits",
 ];
 
 /** The catalog a walk fills in, as a Postgres database. */
@@ -544,6 +577,65 @@ export class CatalogDb {
     );
   }
 
+  /**
+   * The records of a department due to be checked against Amazon, the ones it
+   * has been longest since checking first and the ones never checked before
+   * them. A capped audit picks up where the last one stopped, so a catalog is
+   * worked through over as many runs as it takes.
+   */
+  async toAudit(department: string, limit: number): Promise<string[]> {
+    const { rows } = await this.client.queryArray<[string]>(
+      `SELECT p.asin FROM products p
+       LEFT JOIN audits a ON a.asin = p.asin
+       WHERE p.department = $1
+       ORDER BY a.checked_at ASC NULLS FIRST, p.asin
+       LIMIT $2`,
+      // An audit of everything the department holds asks for no limit at all.
+      [department, Number.isFinite(limit) ? limit : null],
+    );
+    return rows.map(([asin]) => asin);
+  }
+
+  /** The row the catalog holds for a product, in the columns' own order. */
+  async record(asin: string): Promise<unknown[] | undefined> {
+    const { rows } = await this.client.queryArray(
+      `SELECT ${TABLES.products.join(", ")} FROM products WHERE asin = $1`,
+      [asin],
+    );
+    return rows[0];
+  }
+
+  /** Keeps what an audit made of a record, in place of what the last one did. */
+  async audited(finding: Finding): Promise<void> {
+    await this.client.queryArray("BEGIN");
+    try {
+      await this.client.queryArray(
+        `INSERT INTO audits (${TABLES.audits.join(", ")})
+         VALUES (${placeholders(TABLES.audits.length)})
+         ON CONFLICT (asin) DO UPDATE
+           SET checked_at = excluded.checked_at, verdict = excluded.verdict`,
+        [finding.asin, finding.checkedAt, finding.verdict],
+      );
+      await this.client.queryArray(
+        "DELETE FROM audit_differences WHERE asin = $1",
+        [finding.asin],
+      );
+      await this.insert(
+        "audit_differences",
+        finding.differences.map((difference) => [
+          finding.asin,
+          difference.field,
+          difference.stored,
+          difference.found,
+        ]),
+      );
+      await this.client.queryArray("COMMIT");
+    } catch (error) {
+      await this.client.queryArray("ROLLBACK");
+      throw error;
+    }
+  }
+
   /** Writes a product and everything it owns, as one all-or-nothing step. */
   async save(product: Product, images: StoredImage[]): Promise<void> {
     await this.client.queryArray("BEGIN");
@@ -693,7 +785,8 @@ export function connection(databaseUrl: string): ClientOptions {
   };
 }
 
-function productRow(product: Product): unknown[] {
+/** A product as the products table holds it, column by column. */
+export function productRow(product: Product): unknown[] {
   return [
     product.asin,
     product.url,

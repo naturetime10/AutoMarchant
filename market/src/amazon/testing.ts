@@ -46,6 +46,24 @@ export async function truncate(): Promise<void> {
   }
 }
 
+/** Reads the database directly, to check what the catalog actually wrote. */
+export async function query<T>(
+  sql: string,
+  args: unknown[] = [],
+): Promise<T[]> {
+  const client = new Client(connection(TEST_DATABASE_URL));
+  await client.connect();
+  try {
+    const result = await client.queryObject<Record<string, unknown>>({
+      text: sql,
+      args,
+    });
+    return result.rows as T[];
+  } finally {
+    await client.end();
+  }
+}
+
 async function reachable(): Promise<boolean> {
   const client = new Client(connection(TEST_DATABASE_URL));
   try {

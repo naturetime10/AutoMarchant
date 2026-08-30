@@ -1,7 +1,6 @@
 import { assertEquals } from "@std/assert";
-import { Client } from "@db/postgres";
-import { CatalogDb, connection, TABLES } from "./catalog_db.ts";
-import { test, TEST_DATABASE_URL, truncate } from "./testing.ts";
+import { CatalogDb, TABLES } from "./catalog_db.ts";
+import { query, test, TEST_DATABASE_URL, truncate } from "./testing.ts";
 import type { Category, Product } from "./product.ts";
 
 /** A trail as categories, for a fixture that does not care about nodes. */
@@ -47,21 +46,6 @@ const inDb = async (body: (db: CatalogDb) => Promise<void>) => {
     await body(db);
   } finally {
     await db.close();
-  }
-};
-
-/** Reads the database directly, to check what the catalog actually wrote. */
-const query = async <T>(sql: string, args: unknown[] = []): Promise<T[]> => {
-  const client = new Client(connection(TEST_DATABASE_URL));
-  await client.connect();
-  try {
-    const result = await client.queryObject<Record<string, unknown>>({
-      text: sql,
-      args,
-    });
-    return result.rows as T[];
-  } finally {
-    await client.end();
   }
 };
 
@@ -722,4 +706,37 @@ test("CatalogDb reads a category kept in a column into the table beside it", asy
 
   assertEquals(await categoriesOf("B000000001"), ["Books"]);
   assertEquals((await columnsOf("products")).includes("category_id"), false);
+});
+
+test("CatalogDb drops the audit of a product it writes again", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
+    await db.audited({
+      asin: "B000000001",
+      checkedAt: "2026-09-01T00:00:00.000Z",
+      verdict: "differs",
+      differences: [{ field: "price", stored: "12.99", found: "9.99" }],
+    });
+
+    // A walk has read the product again, so what an audit made of what it
+    // used to say is spent: the record is one nobody has checked.
+    await db.save(product("B000000001", { price: undefined }), []);
+
+    assertEquals(await query("SELECT asin FROM audits"), []);
+    assertEquals(await query("SELECT asin FROM audit_differences"), []);
+    assertEquals(await db.toAudit("electronics", 10), ["B000000001"]);
+  });
+});
+
+test("CatalogDb hands back a record in the columns' own order", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
+
+    const record = await db.record("B000000001") ?? [];
+
+    assertEquals(record.length, TABLES.products.length);
+    assertEquals(record[TABLES.products.indexOf("title")], "A cable");
+    assertEquals(record[TABLES.products.indexOf("price")], 12.99);
+    assertEquals(await db.record("B000000002"), undefined);
+  });
 });

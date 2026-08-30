@@ -19,6 +19,7 @@ Deno + Playwright automation for a personal Amazon account.
 cp market/.env.example market/.env   # then fill in AMAZON_EMAIL / AMAZON_PASSWORD
 just market run                      # sign in
 just market discover                 # walk every department, product by product
+just market audit                    # check what the catalog holds against Amazon
 ```
 
 Secrets and settings are kept apart. `market/.env` holds the secrets — the
@@ -196,3 +197,40 @@ rather than the machine or the address. So `discover` reads in a profile of
 its own (`market/.playwright/walk`, `walk_data_dir` under `[browser]`), which
 the account's cookies never reach. Signing in stays a command of its own for
 the pages that do need an account.
+
+`audit` checks the records already in the catalog against the pages behind
+them. It reads a product page the way a walk does and compares what comes back
+with the row the catalog holds, column by column: a price that has moved, a
+title Amazon has rewritten, a rating that has taken another vote. The ASIN, the
+URL, the department and the moment of the reading are not judged — the URL is
+whatever Amazon redirected the ASIN to on the day, and the capture differs by
+definition.
+
+Every record checked gets a verdict in `audits` — `matches`, `differs`, or
+`gone`, which is a record with no product page left behind it — and every
+column that disagreed gets a row in `audit_differences` naming what the catalog
+holds and what the page says instead. The run's progress goes to `audit.log`,
+beside the walk's own log.
+
+```sh
+psql "$DATABASE_URL" -c \
+  "SELECT a.asin, d.field, d.stored, d.found
+     FROM audits a JOIN audit_differences d USING (asin)
+    WHERE a.verdict = 'differs' ORDER BY a.checked_at DESC LIMIT 20"
+```
+
+An audit reads and reports; it changes no record it disagrees with.
+`discover --refresh` is what writes a product as its page reads now, and the
+audit is what says which products are worth spending it on. A record a walk
+writes again drops its audit with it: one just read is one nobody has checked.
+
+The records it has been longest since checking go first, and the ones it has
+never checked before those, so `--products=N` works a department through over
+as many runs as it takes rather than checking the same first N every time.
+The rest is a walk's: an audit reads signed out in the walk's own profile,
+waits out a block and asks again, and reads `--concurrency=N` pages at once.
+
+```sh
+just market audit --departments=books,electronics --products=50
+just market audit --departments=appliances --concurrency=2 --pause=2000
+```

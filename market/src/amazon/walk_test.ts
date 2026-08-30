@@ -1,13 +1,8 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { Catalog } from "./catalog.ts";
 import { type Department, selectDepartments } from "./departments.ts";
-import {
-  DiscoverySettings,
-  type Listing,
-  type Pages,
-  type Reader,
-  Walk,
-} from "./discovery.ts";
+import { DiscoverySettings, Walk } from "./discovery.ts";
+import type { Listing, Pages, Reader } from "./tabs.ts";
 import { Blocked } from "./interstitial.ts";
 import { ImageStore } from "./image_store.ts";
 import { RunLog } from "../run_log.ts";

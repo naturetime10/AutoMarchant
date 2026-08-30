@@ -1,3 +1,4 @@
+import { AuditSettings } from "./amazon/audit.ts";
 import type { AmazonSession } from "./amazon/session.ts";
 import { DiscoverySettings } from "./amazon/discovery.ts";
 import type { Config } from "./config.ts";
@@ -46,7 +47,24 @@ export function command(
       };
     }
 
+    case "audit": {
+      const settings = AuditSettings.parse(rest, {
+        outputDir: config.outputDir,
+        databaseUrl: credentials.databaseUrl,
+        concurrency: config.concurrency,
+      });
+      // An audit reads the same pages a walk does, and is throttled the same
+      // way for reading too many of them, so it reads in the walk's profile.
+      return {
+        profile: config.walkDataDir,
+        signedIn: false,
+        run: (session) => session.audit(settings),
+      };
+    }
+
     default:
-      throw new Error(`Unknown command: ${name}. Try sign-in or discover.`);
+      throw new Error(
+        `Unknown command: ${name}. Try sign-in, discover, or audit.`,
+      );
   }
 }
