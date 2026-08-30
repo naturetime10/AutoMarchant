@@ -207,7 +207,7 @@ whatever Amazon redirected the ASIN to on the day, and the capture differs by
 definition.
 
 Every record checked gets a verdict in `audits` — `matches`, `differs`, or
-`gone`, which is a record with no product page left behind it — and every
+`gone`, which is a record whose page would not come, asked for twice — and every
 column that disagreed gets a row in `audit_differences` naming what the catalog
 holds and what the page says instead. The run's progress goes to `audit.log`,
 beside the walk's own log.
@@ -225,7 +225,11 @@ written as the page reads now — images and all, the reading joining the price
 series in `captures` like any other — and its verdict is `fixed` rather than
 `differs`, with the differences kept beside it to say what the record used to
 hold. A record with no page left behind it is not one a rescan can put right,
-so `gone` is reported and left where it is, for you to decide about.
+so `gone` is reported and left where it is, for you to decide about. Under a
+tabful of readers a page Amazon is slow to serve looks exactly like a page
+that is not there, so the audit asks a second time before calling a record
+gone — and every pass reads every record, so one buried wrongly comes back on
+the next.
 
 A record a walk writes again drops its audit with it: one just read is one
 nobody has checked. So a plain `audit` is the report `--fix` acts on, and

@@ -47,6 +47,8 @@ class Pages implements Readers, Reader {
     private readonly now: Record<string, Partial<Product>> = {},
     /** The products whose page will not load at all. */
     private readonly gone: readonly string[] = [],
+    /** The products whose page will not come the first time it is asked for. */
+    private readonly slow: readonly string[] = [],
   ) {}
 
   async each(
@@ -57,8 +59,12 @@ class Pages implements Readers, Reader {
   }
 
   read(asin: string, _department: Department): Promise<Product | undefined> {
+    const asked = this.readers.filter((read) => read === asin).length;
     this.readers.push(asin);
     if (this.gone.includes(asin)) return Promise.resolve(undefined);
+    if (this.slow.includes(asin) && asked === 0) {
+      return Promise.resolve(undefined);
+    }
     return Promise.resolve(product(asin, this.now[asin] ?? {}));
   }
 }
@@ -241,6 +247,22 @@ test("a record with no page behind it is not one a fix can put right", async () 
     assertEquals(await verdicts(), [{ asin: "B000000001", verdict: "gone" }]);
     assertEquals(await query("SELECT title FROM products"), [
       { title: "A cable" },
+    ]);
+  });
+});
+
+test("a page that would not come is asked for again before a record is buried", async () => {
+  await auditing(async (catalog, audit) => {
+    await catalog.save(product("B000000001"));
+
+    const pages = new Pages({}, [], ["B000000001"]);
+    await audit(pages);
+
+    // The page came the second time, so the record is judged on what it says
+    // rather than on the reading that never arrived.
+    assertEquals(pages.readers, ["B000000001", "B000000001"]);
+    assertEquals(await verdicts(), [
+      { asin: "B000000001", verdict: "matches" },
     ]);
   });
 });

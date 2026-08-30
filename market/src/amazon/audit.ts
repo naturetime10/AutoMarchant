@@ -9,6 +9,7 @@ import {
 } from "./departments.ts";
 import { Flags } from "../flags.ts";
 import { ImageStore } from "./image_store.ts";
+import type { Product } from "./product.ts";
 import type { Reader, Readers } from "./tabs.ts";
 import { Tabs } from "./tabs.ts";
 import type { RunLog } from "../run_log.ts";
@@ -259,7 +260,7 @@ export class Inspection {
     if (!stored) return undefined;
 
     const checkedAt = this.now().toISOString();
-    const found = await reader.read(asin, department);
+    const found = await this.read(asin, department, reader);
     const apart = found ? differences(stored, productRow(found)) : [];
 
     if (!found) {
@@ -293,5 +294,25 @@ export class Inspection {
       differences: apart,
     });
     return verdict;
+  }
+  /**
+   * The page behind a record, asked for a second time when the first reading
+   * did not come. Under a tabful of readers a page Amazon is slow to serve
+   * looks exactly like a page that is not there, and a record is not
+   * something to bury on one reading — a walk gives a product three chances
+   * across three walks for the same reason. An audit needs no such counting
+   * of its own: every pass reads every record, so a page that comes back next
+   * time says so next time.
+   */
+  private async read(
+    asin: string,
+    department: Department,
+    reader: Reader,
+  ): Promise<Product | undefined> {
+    const found = await reader.read(asin, department);
+    if (found) return found;
+
+    await this.log.error(`    ${asin}  no product page; asking again`);
+    return await reader.read(asin, department);
   }
 }
