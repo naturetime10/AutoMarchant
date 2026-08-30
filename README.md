@@ -105,6 +105,16 @@ up even though Amazon has re-ranked the department since: a product that has
 moved to another page, or off the listings entirely, is still queued under the
 ASIN it was ranked by.
 
+The end of a department is the paginator's to say. Amazon caps a department at
+four hundred pages, and asked for the four thousandth it answers with a grid
+anyway — tiles recycled from pages already walked, ordered differently each
+time, under a count that has stopped making sense. Nothing in the grid says it
+is not the department, so a walk that goes by what a page ranked never stops:
+one walked into page 9,462 of Appliances, a page a second, finding a product
+now and again. The paginator is what tells them apart. It greys "Next" out on
+the last page and stops being drawn past it, so a walk reads the page it is on
+and stops where the paginator does.
+
 A department listed to the end keeps no place, so its next walk lists from page
 1 again, where what has newly been ranked appears — and the products that walk
 has already read stay out of the queue. `--pages=N` counts the pages a run
@@ -118,8 +128,8 @@ three times, each wait twice the last. One that outlasts them stops the run.
 A page Amazon would not serve says nothing about what is behind it, so a
 blocked department keeps its place and a blocked product keeps its tries, and
 the next walk picks up where this one was turned away; the page that would not
-come is written to `artifacts/`. Only Amazon re-serving the page before it —
-what it sends in place of a 404 — ends a department's listings.
+come is written to `artifacts/`. A page that ranked nothing ends nothing
+either: the place is kept, and the next walk asks for that page again.
 
 A product page that will not load is asked for again by the next walk, and by
 the one after that; a fourth leaves it alone, so a walk does not open the same
