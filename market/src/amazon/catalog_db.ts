@@ -9,6 +9,19 @@ import { type Product, readByline } from "./product.ts";
  * walk found can be asked questions of in SQL.
  */
 const SCHEMA = `
+  -- A department's trail is a tree, not a sentence: "Kitchen & Dining" is one
+  -- node that many trails pass through. Each node is a row naming its parent,
+  -- so a branch two products share is stored once and can be asked what hangs
+  -- beneath it. The full path rides along as the node's name in the world,
+  -- which is what makes a trail resolve to a node in one statement per level.
+  CREATE TABLE IF NOT EXISTS categories (
+    id SERIAL PRIMARY KEY,
+    parent_id INTEGER REFERENCES categories (id) ON DELETE CASCADE,
+    name TEXT NOT NULL,
+    path TEXT NOT NULL UNIQUE
+  );
+  CREATE INDEX IF NOT EXISTS categories_parent ON categories (parent_id);
+
   CREATE TABLE IF NOT EXISTS products (
     asin TEXT PRIMARY KEY,
     url TEXT NOT NULL,
@@ -16,7 +29,6 @@ const SCHEMA = `
     captured_at TIMESTAMPTZ NOT NULL,
     title TEXT,
     brand TEXT,
-    breadcrumbs TEXT,
     price DOUBLE PRECISION,
     list_price DOUBLE PRECISION,
     currency TEXT,
@@ -32,12 +44,18 @@ const SCHEMA = `
     style TEXT,
     description TEXT,
     aplus TEXT,
-    author TEXT
+    author TEXT,
+    category_id INTEGER REFERENCES categories (id) ON DELETE SET NULL
   );
   -- Books were walked before their byline was understood, so a catalog that
   -- predates the column is given it here rather than being started again.
   ALTER TABLE products ADD COLUMN IF NOT EXISTS author TEXT;
+  -- Likewise a catalog whose trails are still folded into a cell; the cell is
+  -- read into the tree, and then dropped, by adoptBreadcrumbTrees.
+  ALTER TABLE products ADD COLUMN IF NOT EXISTS category_id INTEGER
+    REFERENCES categories (id) ON DELETE SET NULL;
   CREATE INDEX IF NOT EXISTS products_department ON products (department);
+  CREATE INDEX IF NOT EXISTS products_category ON products (category_id);
 
   CREATE TABLE IF NOT EXISTS attributes (
     asin TEXT NOT NULL REFERENCES products (asin) ON DELETE CASCADE,
@@ -105,6 +123,7 @@ const SCHEMA = `
 
 /** Every table and its columns, in order. */
 export const TABLES = {
+  categories: ["id", "parent_id", "name", "path"],
   products: [
     "asin",
     "url",
@@ -112,7 +131,6 @@ export const TABLES = {
     "captured_at",
     "title",
     "brand",
-    "breadcrumbs",
     "price",
     "list_price",
     "currency",
@@ -129,6 +147,7 @@ export const TABLES = {
     "description",
     "aplus",
     "author",
+    "category_id",
   ],
   attributes: ["asin", "kind", "key", "value"],
   features: ["asin", "position", "feature"],
@@ -178,8 +197,77 @@ export class CatalogDb {
     await client.connect();
     await client.queryArray(SCHEMA);
     const db = new CatalogDb(client);
+    await db.adoptBreadcrumbTrees();
     await db.adoptBookAuthors();
     return db;
+  }
+
+  /**
+   * A trail used to be folded into one cell, which made "everything under
+   * Kitchen & Dining" a string match rather than a question about a tree. The
+   * cell still names the trail, so it is read into `categories` here and then
+   * dropped — the trail it held is kept, in the shape it always had.
+   */
+  private async adoptBreadcrumbTrees(): Promise<void> {
+    if (!await this.hasBreadcrumbs()) return;
+
+    const { rows } = await this.client.queryArray<[string, string]>(
+      `SELECT asin, breadcrumbs FROM products WHERE breadcrumbs <> ''`,
+    );
+
+    for (const [asin, trail] of rows) {
+      await this.client.queryArray(
+        "UPDATE products SET category_id = $1 WHERE asin = $2",
+        [await this.categoryFor(trail.split(" > ")), asin],
+      );
+    }
+
+    await this.client.queryArray(
+      "ALTER TABLE products DROP COLUMN breadcrumbs",
+    );
+  }
+
+  private async hasBreadcrumbs(): Promise<boolean> {
+    const { rows } = await this.client.queryArray<[boolean]>(
+      `SELECT count(*) > 0 FROM information_schema.columns
+       WHERE table_schema = 'public' AND table_name = 'products'
+         AND column_name = 'breadcrumbs'`,
+    );
+    return rows[0][0];
+  }
+
+  /**
+   * The trail as a chain of rows, made where it does not reach yet, answered
+   * with the leaf a product is filed under. A branch two trails share resolves
+   * to the row that is already there, which is what keeps the tree a tree.
+   */
+  private async categoryFor(trail: string[]): Promise<number | null> {
+    let parent: number | null = null;
+    let path = "";
+
+    for (const name of trail.filter((name) => name !== "")) {
+      path = path === "" ? name : `${path} > ${name}`;
+      parent = await this.node(parent, name, path);
+    }
+
+    return parent;
+  }
+
+  /** One level of a trail: the row that is there, or the row it becomes. */
+  private async node(
+    parent: number | null,
+    name: string,
+    path: string,
+  ): Promise<number> {
+    // The upsert has to update something for RETURNING to answer with a row
+    // that was already there, so it writes back the name it just read.
+    const { rows } = await this.client.queryArray<[number]>(
+      `INSERT INTO categories (parent_id, name, path) VALUES ($1, $2, $3)
+       ON CONFLICT (path) DO UPDATE SET name = excluded.name
+       RETURNING id`,
+      [parent, name, path],
+    );
+    return rows[0][0];
   }
 
   /**
@@ -241,6 +329,7 @@ export class CatalogDb {
 
   private async write(product: Product, images: StoredImage[]): Promise<void> {
     const asin = product.asin;
+    const category = await this.categoryFor(product.breadcrumbs);
 
     await this.client.queryArray(
       `INSERT INTO products (${TABLES.products.join(", ")})
@@ -249,7 +338,7 @@ export class CatalogDb {
         TABLES.products.filter((column) => column !== "asin")
           .map((column) => `${column} = excluded.${column}`).join(", ")
       }`,
-      productRow(product),
+      productRow(product, category),
     );
 
     for (const table of OWNED) {
@@ -362,7 +451,7 @@ export function connection(databaseUrl: string): ClientOptions {
   };
 }
 
-function productRow(product: Product): unknown[] {
+function productRow(product: Product, category: number | null): unknown[] {
   return [
     product.asin,
     product.url,
@@ -370,7 +459,6 @@ function productRow(product: Product): unknown[] {
     product.capturedAt,
     product.title ?? null,
     product.brand ?? null,
-    product.breadcrumbs.join(" > ") || null,
     product.price?.amount ?? null,
     product.listPrice?.amount ?? null,
     product.price?.currency ?? product.listPrice?.currency ?? null,
@@ -387,6 +475,7 @@ function productRow(product: Product): unknown[] {
     product.description ?? null,
     product.aplus ?? null,
     product.author ?? null,
+    category,
   ];
 }
 

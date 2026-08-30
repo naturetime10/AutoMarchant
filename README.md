@@ -62,6 +62,23 @@ rerun updates a product instead of appending a second copy of it, and
 product's reviews and detail rows do not fit in a product's row, so each gets a
 row of its own rather than being folded into a cell as JSON.
 
+A product's trail — `Home & Kitchen > Kitchen & Dining > Small Appliances >
+Blenders > Personal Size Blenders` — is a tree rather than a sentence, so it
+lives in `categories`: a row per node naming the parent it hangs from, with
+`products.category_id` pointing at the leaf. A branch that two trails share is
+one row, so what sits under `Kitchen & Dining` is a question about the tree
+instead of a string match, and `parent_id` walks it in either direction. A
+catalog that still holds its trails in a cell grows the tree from them the next
+time it is opened.
+
+```sh
+psql "$DATABASE_URL" -c \
+  "SELECT p.title, p.price FROM products p
+     JOIN categories c ON c.id = p.category_id
+   WHERE c.path LIKE 'Home & Kitchen > Kitchen & Dining > %'
+   ORDER BY p.price"
+```
+
 ```sh
 psql "$DATABASE_URL" -c \
   "SELECT title, price, rating_average FROM products
