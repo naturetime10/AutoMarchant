@@ -1,7 +1,10 @@
 import { type BrowserContext, chromium, type Page } from "playwright";
 import type { Config } from "../config.ts";
 import { OtpSource } from "../otp.ts";
+import { RunLog } from "../run_log.ts";
+import { Discovery, type DiscoverySettings } from "./discovery.ts";
 import { SignInPage, type SignInStep } from "./sign_in_page.ts";
+import { AmazonUrls } from "./urls.ts";
 
 // Order history is a real auth gate. /gp/css/homepage.html is not: it renders
 // a "Your Account" page for signed-out visitors instead of redirecting.
@@ -29,9 +32,14 @@ export class AmazonSession {
 
     const context = await chromium.launchPersistentContext(config.userDataDir, {
       headless: config.headless,
-      viewport: { width: 1280, height: 900 },
+      // Amazon's layout follows the viewport, so the window fills the screen
+      // and the viewport follows it. Headless has no screen to fill.
+      viewport: config.headless ? { width: 1920, height: 1080 } : null,
       locale: "en-US",
-      args: ["--disable-blink-features=AutomationControlled"],
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        ...(config.headless ? [] : ["--start-maximized"]),
+      ],
     });
     const page = context.pages()[0] ?? await context.newPage();
 
@@ -69,6 +77,12 @@ export class AmazonSession {
     }
 
     throw new Error(`Gave up after ${MAX_STEPS} sign-in steps.`);
+  }
+
+  /** Walks each department's listings, recording every product found. */
+  async discover(settings: DiscoverySettings): Promise<void> {
+    const log = await RunLog.open(settings.outputDir);
+    await new Discovery(this.page, new AmazonUrls(), settings, log).run();
   }
 
   /** Records what the failing page looked like, for after-the-fact debugging. */
