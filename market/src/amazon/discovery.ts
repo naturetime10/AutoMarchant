@@ -26,8 +26,8 @@ export interface DiscoveryOptions {
   refresh?: boolean;
   /** Breathing room between product pages, so the walk stays polite. */
   pauseMs?: number;
-  /** Tabs reading product pages at once; one at a time by default. */
-  tabs?: number;
+  /** Product pages read at once, a tab each; one at a time by default. */
+  concurrency?: number;
 }
 
 /** What one `discover` run should cover, and where to write it. */
@@ -40,7 +40,7 @@ export class DiscoverySettings {
   readonly imageLimit: number;
   readonly refresh: boolean;
   readonly pauseMs: number;
-  readonly tabs: number;
+  readonly concurrency: number;
 
   constructor(options: DiscoveryOptions = {}) {
     this.departments = options.departments ?? DEPARTMENTS;
@@ -52,13 +52,13 @@ export class DiscoverySettings {
     this.imageLimit = options.imageLimit ?? Number.POSITIVE_INFINITY;
     this.refresh = options.refresh ?? false;
     this.pauseMs = options.pauseMs ?? 1200;
-    this.tabs = options.tabs ?? 1;
+    this.concurrency = options.concurrency ?? 1;
   }
 
   /** Reads the flags `main.ts discover` was given, over what .env set. */
   static parse(
     args: string[],
-    defaults: { outputDir: string; databaseUrl: string; tabs: number },
+    defaults: { outputDir: string; databaseUrl: string; concurrency: number },
   ): DiscoverySettings {
     const options: DiscoveryOptions = { ...defaults };
 
@@ -92,14 +92,14 @@ export class DiscoverySettings {
         case "--pause":
           options.pauseMs = wholeNumber(flag, value, 0);
           break;
-        case "--tabs":
-          options.tabs = wholeNumber(flag, value, 1);
+        case "--concurrency":
+          options.concurrency = wholeNumber(flag, value, 1);
           break;
         default:
           throw new Error(
             `Unknown discover option: ${arg}. Try --departments, --pages, ` +
               "--products, --out, --database, --images, --refresh, --pause, " +
-              "or --tabs.",
+              "or --concurrency.",
           );
       }
     }
@@ -218,7 +218,7 @@ class Tabs {
     log: RunLog,
   ): Promise<Tabs> {
     const tabs: Tab[] = [];
-    for (let index = 0; index < settings.tabs; index++) {
+    for (let index = 0; index < settings.concurrency; index++) {
       tabs.push(new Tab(await context.newPage(), urls, settings, log));
     }
     return new Tabs(tabs);

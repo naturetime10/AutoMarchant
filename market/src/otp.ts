@@ -1,12 +1,12 @@
-import type { Config } from "./config.ts";
+import type { Credentials } from "./credentials.ts";
 
 /** Supplies the one-time code Amazon asks for when 2FA is enabled. */
 export abstract class OtpSource {
   abstract code(): Promise<string>;
 
-  static from(config: Config): OtpSource {
-    return config.totpSecret
-      ? new TotpSource(config.totpSecret)
+  static from(credentials: Credentials): OtpSource {
+    return credentials.totpSecret
+      ? new TotpSource(credentials.totpSecret)
       : new PromptOtpSource();
   }
 }

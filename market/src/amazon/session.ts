@@ -1,5 +1,6 @@
 import { type BrowserContext, chromium, type Page } from "playwright";
 import type { Config } from "../config.ts";
+import type { Credentials } from "../credentials.ts";
 import { OtpSource } from "../otp.ts";
 import { RunLog } from "../run_log.ts";
 import { Discovery, type DiscoverySettings } from "./discovery.ts";
@@ -20,14 +21,18 @@ export class AmazonSession {
 
   private constructor(
     private readonly config: Config,
+    private readonly credentials: Credentials,
     private readonly context: BrowserContext,
     private readonly page: Page,
   ) {
     this.signInPage = new SignInPage(page);
-    this.otp = OtpSource.from(config);
+    this.otp = OtpSource.from(credentials);
   }
 
-  static async open(config: Config): Promise<AmazonSession> {
+  static async open(
+    config: Config,
+    credentials: Credentials,
+  ): Promise<AmazonSession> {
     await Deno.mkdir(config.userDataDir, { recursive: true });
 
     const context = await chromium.launchPersistentContext(config.userDataDir, {
@@ -43,7 +48,7 @@ export class AmazonSession {
     });
     const page = context.pages()[0] ?? await context.newPage();
 
-    return new AmazonSession(config, context, page);
+    return new AmazonSession(config, credentials, context, page);
   }
 
   /** Opens order history; signed-out visitors are bounced to /ap/signin. */
@@ -107,12 +112,12 @@ export class AmazonSession {
   private async advance(step: SignInStep): Promise<void> {
     switch (step) {
       case "email":
-        return await this.signInPage.submitEmail(this.config.email);
+        return await this.signInPage.submitEmail(this.credentials.email);
 
       case "password":
         return await this.signInPage.submitPassword(
-          this.config.email,
-          this.config.password,
+          this.credentials.email,
+          this.credentials.password,
         );
 
       case "otp":
@@ -121,8 +126,9 @@ export class AmazonSession {
       case "captcha": {
         if (this.config.headless) {
           throw new Error(
-            "Amazon served a captcha. Re-run with HEADLESS=false and solve it " +
-              "once; the saved profile carries the session forward.",
+            "Amazon served a captcha. Set headless = false in config.toml, " +
+              "re-run, and solve it once; the saved profile carries the " +
+              "session forward.",
           );
         }
         console.log("Solve the captcha in the browser window; waiting...");
@@ -131,8 +137,9 @@ export class AmazonSession {
 
       case "no-account":
         throw new Error(
-          `Amazon offered to create a new account for ${this.config.email}, ` +
-            "so no account exists for it. Check AMAZON_EMAIL.",
+          "Amazon offered to create a new account for " +
+            `${this.credentials.email}, so no account exists for it. ` +
+            "Check AMAZON_EMAIL.",
         );
 
       case "unknown":
