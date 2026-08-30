@@ -31,9 +31,14 @@ export class AmazonSession {
 
     const context = await chromium.launchPersistentContext(config.userDataDir, {
       headless: config.headless,
-      viewport: { width: 1280, height: 900 },
+      // Amazon's layout follows the viewport, so the window fills the screen
+      // and the viewport follows it. Headless has no screen to fill.
+      viewport: config.headless ? { width: 1920, height: 1080 } : null,
       locale: "en-US",
-      args: ["--disable-blink-features=AutomationControlled"],
+      args: [
+        "--disable-blink-features=AutomationControlled",
+        ...(config.headless ? [] : ["--start-maximized"]),
+      ],
     });
     const page = context.pages()[0] ?? await context.newPage();
 
