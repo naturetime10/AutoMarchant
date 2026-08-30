@@ -122,10 +122,23 @@ export class DiscoverySettings {
   }
 }
 
+/** What one listing page came back with. */
+export interface Listing {
+  /** The ASINs it ranked, in the order Amazon ranked them. */
+  asins: string[];
+  /**
+   * Whether Amazon offers a page after this one. It is the paginator's
+   * answer, not a guess from what the page drew: past its last page Amazon
+   * goes on serving a grid of recycled tiles rather than saying it has run
+   * out, so a page full of products is no sign there is another.
+   */
+  more: boolean;
+}
+
 /** The listings a walk reads, and the products they rank. */
 export interface Pages {
-  /** The ASINs one listing page ranks, in the order Amazon ranked them. */
-  list(department: Department, page: number): Promise<string[]>;
+  /** One listing page: what it ranked, and whether there is another. */
+  list(department: Department, page: number): Promise<Listing>;
 
   /** Reads the products of one page, across however many readers there are. */
   each(
@@ -232,38 +245,36 @@ export class Walk {
     // resumed walk gets as many of them as a fresh one.
     const last = first + this.settings.maxPages - 1;
     if (first > 1) await this.log.info(`  listing from page ${first}`);
-    let previous = "";
 
     for (let page = first; page <= last && !budget.spent; page++) {
-      const asins = await this.pages.list(department, page);
-      if (asins.length === 0) {
-        // Not the end of the listings — the end re-serves the page before it
-        // — but a page that ranked nothing because it never drew. The place
-        // is kept, so the next walk asks for this page rather than taking the
+      const listing = await this.pages.list(department, page);
+      if (listing.asins.length === 0) {
+        // Not the end of the listings — the paginator is what says that — but
+        // a page that ranked nothing because it never drew. The place is
+        // kept, so the next walk asks for this page rather than taking the
         // department for one that has been read to the end.
         await this.log.error(`  page ${page}: nothing ranked; stopping here`);
         return;
       }
-      // Past the last page Amazon re-serves the previous one rather than 404.
-      const signature = asins.join(",");
-      if (signature === previous) {
-        // The listings are listed out: the next walk starts at the top, where
-        // what has newly been ranked appears.
-        await this.catalog.forgetPlace(department.slug);
-        return;
-      }
-      previous = signature;
 
-      await this.log.info(`  page ${page}: ${asins.length} products`);
+      await this.log.info(`  page ${page}: ${listing.asins.length} products`);
       // The page is queued before a product of it is read, so the walk has no
       // reason to open the page again: whatever it does not get to now is in
       // the queue, and read by the walk after it.
-      await this.catalog.listed(department.slug, page, asins);
+      await this.catalog.listed(department.slug, page, listing.asins);
       await this.catalog.keepPlace(department.slug, page + 1);
       const due = this.settings.refresh
-        ? asins
+        ? listing.asins
         : await this.catalog.unread(department.slug);
       await this.read(department, budget, tried, due);
+
+      if (!listing.more) {
+        // Amazon's paginator offers nothing after this page, and the page has
+        // been read: the listings are listed out. The next walk starts at the
+        // top, where what has newly been ranked appears.
+        await this.catalog.forgetPlace(department.slug);
+        return;
+      }
     }
   }
 
@@ -369,8 +380,8 @@ class Tabs implements Pages {
     return new Tabs(tabs);
   }
 
-  list(department: Department, page: number): Promise<string[]> {
-    return this.tabs[0].asins(department, page);
+  list(department: Department, page: number): Promise<Listing> {
+    return this.tabs[0].listing(department, page);
   }
 
   each(
@@ -403,11 +414,14 @@ class Tab implements Reader {
     this.gate = new Interstitial(page);
   }
 
-  /** The ASINs one listing page ranks, in the order Amazon ranked them. */
-  async asins(department: Department, page: number): Promise<string[]> {
+  /** One listing page: what it ranked, and whether there is another. */
+  async listing(department: Department, page: number): Promise<Listing> {
     await this.visit(this.urls.department(department.node, page));
-    if (!await this.results.waitForResults()) return [];
-    return await this.results.asins();
+    if (!await this.results.waitForResults()) return { asins: [], more: false };
+    return {
+      asins: await this.results.asins(),
+      more: await this.results.offersPageAfter(page),
+    };
   }
 
   /** Reads one product; a page that will not load costs that product only. */
