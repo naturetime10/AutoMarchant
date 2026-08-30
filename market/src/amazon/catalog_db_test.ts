@@ -212,3 +212,68 @@ test("CatalogDb declares the same columns the schema creates", async () => {
     }
   });
 });
+
+test("CatalogDb keeps a book's author", async () => {
+  await inDb(async (db) => {
+    await db.save(
+      product("B000000001", {
+        department: "books",
+        brand: undefined,
+        author: "Amy Long",
+        store: { soldBy: "Amazon.com" },
+      }),
+      [],
+    );
+
+    assertEquals(
+      await query("SELECT author, brand, store_name FROM products"),
+      [{ author: "Amy Long", brand: null, store_name: null }],
+    );
+  });
+});
+
+test("CatalogDb moves a book's byline out of the store it is not", async () => {
+  await truncate();
+  // A catalog as an earlier walk left it: no author column, and the byline
+  // filed as the brand and the storefront.
+  const legacy = await CatalogDb.open(TEST_DATABASE_URL);
+  await legacy.close();
+  await query("ALTER TABLE products DROP COLUMN IF EXISTS author");
+  await query(
+    `INSERT INTO products (asin, url, department, captured_at, title, brand,
+       store_name, store_url, sold_by)
+     VALUES ($1, '', 'books', now(), 'The Subtle Art of Leadership', $2, $2,
+       'https://www.amazon.com/stores/author/B0FFM8TWFH', 'Amazon.com')`,
+    ["B000000001", "by Amy Long (Author) Format: Paperback"],
+  );
+
+  const db = await CatalogDb.open(TEST_DATABASE_URL);
+  await db.close();
+
+  assertEquals(
+    await query(
+      "SELECT author, brand, store_name, store_url, sold_by FROM products",
+    ),
+    [{
+      author: "Amy Long",
+      brand: null,
+      store_name: null,
+      store_url: null,
+      sold_by: "Amazon.com",
+    }],
+  );
+});
+
+test("CatalogDb leaves a storefront byline where it is", async () => {
+  await inDb(async (db) => {
+    await db.save(product("B000000001"), []);
+  });
+
+  const later = await CatalogDb.open(TEST_DATABASE_URL);
+  await later.close();
+
+  assertEquals(
+    await query("SELECT author, brand, store_name FROM products"),
+    [{ author: null, brand: "Anker", store_name: "Anker" }],
+  );
+});

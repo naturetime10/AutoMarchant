@@ -48,6 +48,8 @@ export interface Product {
   capturedAt: string;
   title?: string;
   brand?: string;
+  /** Who wrote it, on a page whose byline names contributors, not a brand. */
+  author?: string;
   breadcrumbs: string[];
   images: string[];
   price?: Money;
@@ -128,12 +130,13 @@ export function toProduct(
 ): Product {
   const details = toRecord(raw.details);
   const variations = toRecord(raw.variations);
-  const brand = brandFrom(raw.byline);
+  const { brand, author } = readByline(raw.byline);
 
   return {
     ...context,
     ...optional("title", cleanText(raw.title)),
     ...optional("brand", brand),
+    ...optional("author", author),
     breadcrumbs: texts(raw.breadcrumbs),
     images: unique(raw.images),
     ...optionalValue("price", parseMoney(raw.price)),
@@ -148,8 +151,10 @@ export function toProduct(
     ),
     ...optional("availability", cleanText(raw.availability)),
     store: {
+      // A book's byline links to its author, who is no storefront: with no
+      // brand named, there is no store for the name or the link to belong to.
       ...optional("name", brand),
-      ...optional("url", cleanText(raw.bylineUrl)),
+      ...optional("url", brand ? cleanText(raw.bylineUrl) : ""),
       ...optional("soldBy", cleanText(raw.soldBy)),
       ...optional("shipsFrom", cleanText(raw.shipsFrom)),
       ...optional("sellerUrl", cleanText(raw.sellerUrl)),
@@ -188,14 +193,54 @@ function toReview(raw: RawReview): Review {
   };
 }
 
+/** The byline of a book, which opens with "by" or credits a contributor. */
+const CONTRIBUTED =
+  /^by\s|\([^)]*\b(author|editor|illustrator|translator|narrator|foreword|contributor)\b/i;
+const BY = /^by\s+/i;
+/** "Format: Paperback" trails the contributors on a book's byline. */
+const FORMAT = /\s*\bformat:.*$/i;
+/** A credit: the name up to the role it is followed by, "Jane Doe (Author)". */
+const CONTRIBUTOR = /([^,;›(]+)\(([^)]*)\)/g;
+
+/** What a byline names: the brand behind a product, or a book's author. */
+export interface Byline {
+  brand: string;
+  author: string;
+}
+
+/**
+ * A product's byline names its brand, but a book's names the people who wrote
+ * it — so a book has an author where another product has a brand, and neither
+ * has both.
+ */
+export function readByline(byline: string | null): Byline {
+  const text = cleanText(byline).replace(FORMAT, "");
+  return CONTRIBUTED.test(text)
+    ? { brand: "", author: authorsIn(text) }
+    : { brand: brandIn(text), author: "" };
+}
+
 /** "Visit the Anker Store" and "Brand: Anker" both name Anker. */
-function brandFrom(byline: string | null): string {
-  const text = cleanText(byline);
+function brandIn(text: string): string {
   return cleanText(
     text.replace(/^visit the\s+/i, "")
       .replace(/\s+store$/i, "")
       .replace(/^brand:\s*/i, ""),
   );
+}
+
+/**
+ * The authors among the contributors: an illustrator or a translator is
+ * credited the same way and is not one. An uncredited byline is all author.
+ */
+function authorsIn(text: string): string {
+  const credits = [...text.matchAll(CONTRIBUTOR)];
+  if (credits.length === 0) return cleanText(text).replace(BY, "");
+  return credits
+    .filter(([, , role]) => /\bauthor\b/i.test(role))
+    .map(([, name]) => cleanText(name).replace(BY, ""))
+    .filter((name) => name.length > 0)
+    .join(", ");
 }
 
 function measurementsFrom(

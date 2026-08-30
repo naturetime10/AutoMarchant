@@ -156,3 +156,43 @@ Deno.test("toProduct leaves absent fields out rather than guessing", () => {
   assertEquals(empty.answeredQuestions, undefined);
   assertEquals(empty.description, undefined);
 });
+
+Deno.test("toProduct reads a book's author, not a storefront", () => {
+  const book = toProduct({
+    ...raw,
+    byline: "by Amy Long (Author) Format: Paperback",
+    bylineUrl: "https://www.amazon.com/stores/author/B0FFM8TWFH",
+  }, context);
+
+  assertEquals(book.author, "Amy Long");
+  // The byline names a person, so it names no brand and no storefront.
+  assertEquals(book.brand, undefined);
+  assertEquals(book.store.name, undefined);
+  assertEquals(book.store.url, undefined);
+  // Who fills the order is still read from the buy box.
+  assertEquals(book.store.soldBy, "AnkerDirect");
+});
+
+Deno.test("toProduct keeps the authors among a book's contributors", () => {
+  const authorOf = (byline: string) =>
+    toProduct({ ...raw, byline }, context).author;
+
+  assertEquals(
+    authorOf("by D. Terrence Foster MD (Author) Format: Kindle Edition"),
+    "D. Terrence Foster MD",
+  );
+  assertEquals(
+    authorOf("by Jane Doe (Author), John Smith (Author)"),
+    "Jane Doe, John Smith",
+  );
+  assertEquals(
+    authorOf("by Jane Doe (Author), John Smith (Illustrator)"),
+    "Jane Doe",
+  );
+  assertEquals(
+    authorOf("by Jane Doe (Author) › Visit Amazon's Jane Doe Page"),
+    "Jane Doe",
+  );
+  assertEquals(authorOf("by Jane Doe"), "Jane Doe");
+  assertEquals(authorOf("Visit the Anker Store"), undefined);
+});
