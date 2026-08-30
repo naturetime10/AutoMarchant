@@ -54,6 +54,30 @@ export class ProductPage {
         (document.querySelector(selector) as HTMLAnchorElement | null)?.href ??
           null;
 
+      // A category link names its browse node two ways: a trail links the
+      // browse page (`?node=5046`), a rank links the bestseller list
+      // (`/gp/bestsellers/books/5046/`). The store slug in the second is not
+      // a node, so only the digits after it count.
+      const browseNode = (anchor: HTMLAnchorElement): string | null =>
+        anchor.href.match(/[?&]node=(\d+)/)?.[1] ??
+          anchor.href.match(/\/gp\/bestsellers\/[^/]+\/(\d+)/)?.[1] ?? null;
+      const linked = (selector: string, root: ParentNode = document) =>
+        [...root.querySelectorAll(selector)].map((anchor) => ({
+          name: text(anchor) ?? "",
+          node: browseNode(anchor as HTMLAnchorElement),
+        }));
+
+      // "Best Sellers Rank" sits in a detail bullet on one layout and a
+      // details row on the other, so it is found by what it says.
+      const rank = [
+        ...document.querySelectorAll(
+          "#detailBullets_feature_div li, #prodDetails tr, " +
+            "#productDetails_detailBullets_sections1 tr, " +
+            "#productDetails_expanderTables_depthLeftSections tr, " +
+            ".product-facts-detail",
+        ),
+      ].find((row) => /Best Sellers Rank/i.test(row.textContent ?? ""));
+
       const rows: Array<[string, string]> = [];
       // Tabular details: technical specs, "Additional Information", size charts.
       for (
@@ -176,7 +200,8 @@ export class ProductPage {
         title: one("#productTitle"),
         byline: one("#bylineInfo", "#brand", "#bylineInfo_feature_div a"),
         bylineUrl: link("#bylineInfo"),
-        breadcrumbs: many("#wayfinding-breadcrumbs_feature_div ul li a"),
+        breadcrumbs: linked("#wayfinding-breadcrumbs_feature_div ul li a"),
+        ranked: rank ? linked("a", rank) : [],
         images,
         price: one(
           "#corePrice_feature_div .a-offscreen",
