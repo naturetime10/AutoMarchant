@@ -1,6 +1,6 @@
 import { Client, type ClientOptions, Oid } from "@db/postgres";
 import type { StoredImage } from "./image_store.ts";
-import type { Product } from "./product.ts";
+import { type Product, readByline } from "./product.ts";
 
 /**
  * A product has a shape of its own: many reviews, many detail rows, many
@@ -31,8 +31,12 @@ const SCHEMA = `
     seller_url TEXT,
     style TEXT,
     description TEXT,
-    aplus TEXT
+    aplus TEXT,
+    author TEXT
   );
+  -- Books were walked before their byline was understood, so a catalog that
+  -- predates the column is given it here rather than being started again.
+  ALTER TABLE products ADD COLUMN IF NOT EXISTS author TEXT;
   CREATE INDEX IF NOT EXISTS products_department ON products (department);
 
   CREATE TABLE IF NOT EXISTS attributes (
@@ -124,6 +128,7 @@ export const TABLES = {
     "style",
     "description",
     "aplus",
+    "author",
   ],
   attributes: ["asin", "kind", "key", "value"],
   features: ["asin", "position", "feature"],
@@ -172,7 +177,34 @@ export class CatalogDb {
     const client = new Client(connection(url));
     await client.connect();
     await client.queryArray(SCHEMA);
-    return new CatalogDb(client);
+    const db = new CatalogDb(client);
+    await db.adoptBookAuthors();
+    return db;
+  }
+
+  /**
+   * A book's byline names its author, but an earlier walk filed it as the
+   * brand and the storefront. The byline it wrote still says who wrote the
+   * book, so it is read again here and the rows it misfiled are emptied —
+   * cheaper, and truer to when it was read, than walking the pages again.
+   */
+  private async adoptBookAuthors(): Promise<void> {
+    const { rows } = await this.client.queryArray<[string, string]>(
+      `SELECT asin, coalesce(store_name, brand) FROM products
+       WHERE author IS NULL
+         AND coalesce(store_name, brand) ~* '^by |\\(author\\)'`,
+    );
+
+    for (const [asin, byline] of rows) {
+      const { author } = readByline(byline);
+      if (!author) continue;
+      await this.client.queryArray(
+        `UPDATE products
+         SET author = $1, brand = NULL, store_name = NULL, store_url = NULL
+         WHERE asin = $2`,
+        [author, asin],
+      );
+    }
   }
 
   async has(asin: string): Promise<boolean> {
@@ -354,6 +386,7 @@ function productRow(product: Product): unknown[] {
     product.style ?? null,
     product.description ?? null,
     product.aplus ?? null,
+    product.author ?? null,
   ];
 }
 
