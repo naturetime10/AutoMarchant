@@ -1,7 +1,9 @@
 import { type BrowserContext, chromium, type Page } from "playwright";
 import type { Config } from "../config.ts";
 import { OtpSource } from "../otp.ts";
+import { Discovery, type DiscoverySettings } from "./discovery.ts";
 import { SignInPage, type SignInStep } from "./sign_in_page.ts";
+import { AmazonUrls } from "./urls.ts";
 
 // Order history is a real auth gate. /gp/css/homepage.html is not: it renders
 // a "Your Account" page for signed-out visitors instead of redirecting.
@@ -69,6 +71,11 @@ export class AmazonSession {
     }
 
     throw new Error(`Gave up after ${MAX_STEPS} sign-in steps.`);
+  }
+
+  /** Walks each department's listings, recording every product found. */
+  discover(settings: DiscoverySettings): Promise<void> {
+    return new Discovery(this.page, new AmazonUrls(), settings).run();
   }
 
   /** Records what the failing page looked like, for after-the-fact debugging. */

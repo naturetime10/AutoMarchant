@@ -8,14 +8,19 @@ install:
 
 # Unit tests.
 test:
-    deno test --allow-env
+    deno test --allow-env --allow-read --allow-write
 
 # Formatting, lint, and type check.
 check:
     deno fmt --check
     deno lint
-    deno check main.ts main_test.ts
+    deno check .
 
 # Apply formatting.
 fmt:
     deno fmt
+
+# Walk every department page by page, writing each product to artifacts/catalog.
+# Options: --departments=books,electronics --pages=N --products=N --out=DIR --pause=MS
+discover *options:
+    deno run -A --env-file=.env main.ts discover {{ options }}

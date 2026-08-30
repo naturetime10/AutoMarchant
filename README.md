@@ -18,6 +18,17 @@ Deno + Playwright automation for a personal Amazon account.
 ```sh
 cp market/.env.example market/.env   # then fill in AMAZON_EMAIL / AMAZON_PASSWORD
 just market run                      # sign in
+just market discover                 # walk every department, product by product
+```
+
+`discover` walks each department's listings page by page and reads every
+product detail page it ranks — title, images, price, rating, store, details,
+style, measurements, styling ideas, questions, reviews, and description. Each
+department is written to `market/artifacts/catalog/<department>.jsonl`, one JSON
+object per product; rerunning skips what a previous run already captured.
+
+```sh
+just market discover --departments=electronics,books --pages=2 --products=50
 ```
 
 Sign-in runs in a visible Chromium window by default — Amazon flags headless
