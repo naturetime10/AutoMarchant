@@ -3,6 +3,7 @@ import type { Config } from "../config.ts";
 import type { Credentials } from "../credentials.ts";
 import { OtpSource } from "../otp.ts";
 import { RunLog } from "../run_log.ts";
+import { Diagnostics } from "./diagnostics.ts";
 import { Discovery, type DiscoverySettings } from "./discovery.ts";
 import { SignInPage, type SignInStep } from "./sign_in_page.ts";
 import { AmazonUrls } from "./urls.ts";
@@ -18,6 +19,8 @@ const MAX_STEPS = 12;
 export class AmazonSession {
   private readonly signInPage: SignInPage;
   private readonly otp: OtpSource;
+  /** One run, one artifact: whichever page was given up on first. */
+  private readonly diagnostics: Diagnostics;
 
   private constructor(
     private readonly config: Config,
@@ -27,6 +30,7 @@ export class AmazonSession {
   ) {
     this.signInPage = new SignInPage(page);
     this.otp = OtpSource.from(credentials);
+    this.diagnostics = new Diagnostics(config.artifactsDir);
   }
 
   static async open(
@@ -87,22 +91,23 @@ export class AmazonSession {
   /** Walks each department's listings, recording every product found. */
   async discover(settings: DiscoverySettings): Promise<void> {
     const log = await RunLog.open(settings.outputDir);
-    await new Discovery(this.context, new AmazonUrls(), settings, log).run();
+    await new Discovery(
+      this.context,
+      new AmazonUrls(),
+      settings,
+      log,
+      this.diagnostics,
+    ).run();
   }
 
-  /** Records what the failing page looked like, for after-the-fact debugging. */
-  async saveDiagnostics(): Promise<void> {
-    try {
-      await Deno.mkdir(this.config.artifactsDir, { recursive: true });
-      const stem = `${this.config.artifactsDir}/${
-        new Date().toISOString().replaceAll(":", "-")
-      }`;
-      await this.page.screenshot({ path: `${stem}.png`, fullPage: true });
-      await Deno.writeTextFile(`${stem}.html`, await this.page.content());
-      console.error(`Wrote ${stem}.{png,html}`);
-    } catch (error) {
-      console.error("Could not write diagnostics:", error);
-    }
+  /**
+   * Records what the failing page looked like, for after-the-fact debugging.
+   * A walk that gave up on a page of its own has already written that one —
+   * the tab it was reading with is closed by now, and this page, the one
+   * sign-in was left on, is not what went wrong.
+   */
+  saveDiagnostics(): Promise<void> {
+    return this.diagnostics.save(this.page);
   }
 
   close(): Promise<void> {
