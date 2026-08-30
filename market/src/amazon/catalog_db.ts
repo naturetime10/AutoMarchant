@@ -390,11 +390,16 @@ export class CatalogDb {
   ): Promise<void> {
     if (asins.length === 0) return;
     // A product the listings rank a second time keeps the row it already has,
-    // and with it the reads that row has been given.
+    // and with it the reads that row has been given. A page that ranks one
+    // twice — the tile Amazon sponsors it with, beside the tile it earned —
+    // queues it at the higher of the two ranks; without DISTINCT ON the two
+    // would be one statement writing the same row twice, which Postgres
+    // refuses outright.
     await this.client.queryArray(
       `INSERT INTO listings (department, asin, page, position)
-       SELECT $1, listed.asin, $2, listed.position
+       SELECT DISTINCT ON (listed.asin) $1, listed.asin, $2, listed.position
        FROM unnest($3::text[]) WITH ORDINALITY AS listed(asin, position)
+       ORDER BY listed.asin, listed.position
        ON CONFLICT (department, asin)
        DO UPDATE SET page = excluded.page, position = excluded.position`,
       [department, page, asins],

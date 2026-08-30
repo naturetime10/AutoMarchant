@@ -539,6 +539,22 @@ test("CatalogDb takes a product it has read out of the queue", async () => {
   });
 });
 
+test("CatalogDb queues a product one page ranked twice, once", async () => {
+  await inDb(async (db) => {
+    // Amazon ranks a product twice on the page it sponsors it on.
+    await db.listed("electronics", 1, [
+      "B000000011",
+      "B000000012",
+      "B000000011",
+    ]);
+
+    assertEquals(await db.unread("electronics"), [
+      "B000000011",
+      "B000000012",
+    ]);
+  });
+});
+
 test("CatalogDb queues a product a later listing re-ranked, once", async () => {
   await inDb(async (db) => {
     await db.listed("electronics", 1, ["B000000011", "B000000012"]);
