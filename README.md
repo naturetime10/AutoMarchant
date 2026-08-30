@@ -23,9 +23,12 @@ just market discover                 # walk every department, product by product
 
 `discover` walks each department's listings page by page and reads every
 product detail page it ranks — title, images, price, rating, store, details,
-style, measurements, styling ideas, questions, reviews, and description. Each
-department is written to `market/artifacts/catalog/<department>.jsonl`, one JSON
-object per product; rerunning skips what a previous run already captured.
+style, measurements, styling ideas, questions, reviews, and description.
+
+Each department is written to `output/market/discover/`, a row appended to
+`<department>.csv` as each product is read, alongside a `<department>.jsonl`
+that keeps the nested fields whole and lets a rerun skip what an earlier run
+captured. The run's progress is appended to `discover.log` there too.
 
 ```sh
 just market discover --departments=electronics,books --pages=2 --products=50

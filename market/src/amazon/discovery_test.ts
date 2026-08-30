@@ -2,13 +2,15 @@ import { assertEquals, assertThrows } from "@std/assert";
 import { DEPARTMENTS } from "./departments.ts";
 import { DiscoverySettings } from "./discovery.ts";
 
+const OUTPUT = "../output/market/discover";
+
 Deno.test("settings walk every department and every page by default", () => {
-  const settings = DiscoverySettings.parse([], "artifacts");
+  const settings = DiscoverySettings.parse([], OUTPUT);
 
   assertEquals(settings.departments.length, DEPARTMENTS.length);
   assertEquals(settings.maxPages, Number.POSITIVE_INFINITY);
   assertEquals(settings.maxProducts, Number.POSITIVE_INFINITY);
-  assertEquals(settings.outputDir, "artifacts/catalog");
+  assertEquals(settings.outputDir, OUTPUT);
 });
 
 Deno.test("settings narrow the walk to the flags given", () => {
@@ -19,7 +21,7 @@ Deno.test("settings narrow the walk to the flags given", () => {
       "--products=10",
       "--pause=0",
     ],
-    "artifacts",
+    OUTPUT,
   );
 
   assertEquals(settings.departments.map((d) => d.slug), [
@@ -33,19 +35,19 @@ Deno.test("settings narrow the walk to the flags given", () => {
 
 Deno.test("settings take an output directory of their own", () => {
   assertEquals(
-    DiscoverySettings.parse(["--out=/tmp/catalog"], "artifacts").outputDir,
+    DiscoverySettings.parse(["--out=/tmp/catalog"], OUTPUT).outputDir,
     "/tmp/catalog",
   );
 });
 
 Deno.test("settings reject a flag that is not a number", () => {
   assertThrows(
-    () => DiscoverySettings.parse(["--pages=lots"], "artifacts"),
+    () => DiscoverySettings.parse(["--pages=lots"], OUTPUT),
     Error,
     "--pages",
   );
   assertThrows(
-    () => DiscoverySettings.parse(["--products=0"], "artifacts"),
+    () => DiscoverySettings.parse(["--products=0"], OUTPUT),
     Error,
     "--products",
   );
@@ -53,7 +55,7 @@ Deno.test("settings reject a flag that is not a number", () => {
 
 Deno.test("settings reject an unknown flag rather than ignoring it", () => {
   assertThrows(
-    () => DiscoverySettings.parse(["--everything"], "artifacts"),
+    () => DiscoverySettings.parse(["--everything"], OUTPUT),
     Error,
     "--everything",
   );

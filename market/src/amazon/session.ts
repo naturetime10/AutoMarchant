@@ -1,6 +1,7 @@
 import { type BrowserContext, chromium, type Page } from "playwright";
 import type { Config } from "../config.ts";
 import { OtpSource } from "../otp.ts";
+import { RunLog } from "../run_log.ts";
 import { Discovery, type DiscoverySettings } from "./discovery.ts";
 import { SignInPage, type SignInStep } from "./sign_in_page.ts";
 import { AmazonUrls } from "./urls.ts";
@@ -79,8 +80,9 @@ export class AmazonSession {
   }
 
   /** Walks each department's listings, recording every product found. */
-  discover(settings: DiscoverySettings): Promise<void> {
-    return new Discovery(this.page, new AmazonUrls(), settings).run();
+  async discover(settings: DiscoverySettings): Promise<void> {
+    const log = await RunLog.open(settings.outputDir);
+    await new Discovery(this.page, new AmazonUrls(), settings, log).run();
   }
 
   /** Records what the failing page looked like, for after-the-fact debugging. */

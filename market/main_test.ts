@@ -23,6 +23,7 @@ Deno.test("Config reads credentials and applies defaults", () => {
   assertEquals(config.totpSecret, undefined);
   assertEquals(config.headless, false);
   assertEquals(config.userDataDir, ".playwright/amazon");
+  assertEquals(config.outputDir, "../output/market/discover");
 });
 
 Deno.test("Config fails loudly without credentials", () => {

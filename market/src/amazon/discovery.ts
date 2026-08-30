@@ -7,6 +7,7 @@ import {
 } from "./departments.ts";
 import { ProductPage } from "./product_page.ts";
 import { SearchResultsPage } from "./search_results_page.ts";
+import type { RunLog } from "../run_log.ts";
 import type { AmazonUrls } from "./urls.ts";
 
 export interface DiscoveryOptions {
@@ -31,13 +32,13 @@ export class DiscoverySettings {
     this.departments = options.departments ?? DEPARTMENTS;
     this.maxPages = options.maxPages ?? Number.POSITIVE_INFINITY;
     this.maxProducts = options.maxProducts ?? Number.POSITIVE_INFINITY;
-    this.outputDir = options.outputDir ?? "artifacts/catalog";
+    this.outputDir = options.outputDir ?? "../output/market/discover";
     this.pauseMs = options.pauseMs ?? 1200;
   }
 
   /** Reads the flags `main.ts discover` was given. */
-  static parse(args: string[], artifactsDir: string): DiscoverySettings {
-    const options: DiscoveryOptions = { outputDir: `${artifactsDir}/catalog` };
+  static parse(args: string[], outputDir: string): DiscoverySettings {
+    const options: DiscoveryOptions = { outputDir };
 
     for (const arg of args) {
       const separator = arg.indexOf("=");
@@ -83,6 +84,7 @@ export class Discovery {
     private readonly page: Page,
     private readonly urls: AmazonUrls,
     private readonly settings: DiscoverySettings,
+    private readonly log: RunLog,
   ) {
     this.results = new SearchResultsPage(page);
     this.product = new ProductPage(page);
@@ -99,11 +101,12 @@ export class Discovery {
       this.settings.outputDir,
       department.slug,
     );
-    console.log(`\n${department.name} -> ${store.path}`);
+    await this.log.info(`${department.name} -> ${store.csvPath}`);
 
     let captured = 0;
     let previous = "";
 
+    pages:
     for (let page = 1; page <= this.settings.maxPages; page++) {
       const asins = await this.listPage(department, page);
       // Past the last page Amazon re-serves the previous one rather than 404.
@@ -111,9 +114,9 @@ export class Discovery {
       if (asins.length === 0 || signature === previous) break;
       previous = signature;
 
-      console.log(`  page ${page}: ${asins.length} products`);
+      await this.log.info(`  page ${page}: ${asins.length} products`);
       for (const asin of asins) {
-        if (captured >= this.settings.maxProducts) return;
+        if (captured >= this.settings.maxProducts) break pages;
         if (store.has(asin)) continue;
 
         const product = await this.capture(asin, department);
@@ -121,11 +124,11 @@ export class Discovery {
 
         await store.append(product);
         captured++;
-        console.log(`    ${asin}  ${product.title ?? "(untitled)"}`);
+        await this.log.info(`    ${asin}  ${product.title ?? "(untitled)"}`);
       }
     }
 
-    console.log(
+    await this.log.info(
       `  ${department.slug}: ${captured} new, ${store.size} in total`,
     );
   }
@@ -148,14 +151,14 @@ export class Discovery {
         waitUntil: "domcontentloaded",
       });
       if (!await this.product.waitForProduct()) {
-        console.error(`    ${asin}  skipped: no product page`);
+        await this.log.error(`    ${asin}  skipped: no product page`);
         return undefined;
       }
       const product = await this.product.read(asin, department.slug);
       await this.page.waitForTimeout(this.settings.pauseMs);
       return product;
     } catch (error) {
-      console.error(
+      await this.log.error(
         `    ${asin}  skipped: ${
           error instanceof Error ? error.message : error
         }`,

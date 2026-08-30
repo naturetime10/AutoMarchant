@@ -76,3 +76,39 @@ Deno.test("CatalogStore starts empty in a directory that does not exist yet", as
     await Deno.remove(parent, { recursive: true });
   }
 });
+
+Deno.test("CatalogStore writes a CSV beside the JSON lines", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    const store = await CatalogStore.open(dir, "electronics");
+    await store.append(product("B000000001"));
+    await store.append(product("B000000002"));
+
+    const lines = (await Deno.readTextFile(`${dir}/electronics.csv`))
+      .trimEnd().split("\n");
+    assertEquals(lines.length, 3);
+    assertEquals(lines[0].startsWith("asin,url,department"), true);
+    assertEquals(lines[1].startsWith("B000000001,"), true);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("CatalogStore heads the CSV once, however often it reopens", async () => {
+  const dir = await Deno.makeTempDir();
+  try {
+    await (await CatalogStore.open(dir, "electronics")).append(
+      product("B000000001"),
+    );
+    await (await CatalogStore.open(dir, "electronics")).append(
+      product("B000000002"),
+    );
+
+    const lines = (await Deno.readTextFile(`${dir}/electronics.csv`))
+      .trimEnd().split("\n");
+    assertEquals(lines.length, 3);
+    assertEquals(lines.filter((line) => line.startsWith("asin,")).length, 1);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});

@@ -20,7 +20,7 @@ check:
 fmt:
     deno fmt
 
-# Walk every department page by page, writing each product to artifacts/catalog.
+# Walk every department page by page, writing each product to output/market/discover.
 # Options: --departments=books,electronics --pages=N --products=N --out=DIR --pause=MS
 discover *options:
     deno run -A --env-file=.env main.ts discover {{ options }}

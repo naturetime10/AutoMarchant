@@ -14,7 +14,7 @@ function task(args: string[], config: Config): Task {
       return () => Promise.resolve();
 
     case "discover": {
-      const settings = DiscoverySettings.parse(rest, config.artifactsDir);
+      const settings = DiscoverySettings.parse(rest, config.outputDir);
       return (session) => session.discover(settings);
     }
 
