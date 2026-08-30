@@ -514,3 +514,29 @@ test("CatalogDb grows a tree from the trail a string held", async () => {
   assertEquals(await under("Home & Kitchen"), ["B000000001", "B000000002"]);
   assertEquals((await columnsOf("products")).includes("breadcrumbs"), false);
 });
+
+test("CatalogDb keeps the page a walk stopped on", async () => {
+  await inDb(async (db) => {
+    // A department never walked starts at the top of its listings.
+    assertEquals(await db.nextPage("electronics"), 1);
+
+    await db.keepPlace("electronics", 7);
+    assertEquals(await db.nextPage("electronics"), 7);
+    // Each department is walked on its own, so it keeps its own place.
+    assertEquals(await db.nextPage("books"), 1);
+
+    await db.keepPlace("electronics", 8);
+    assertEquals(await db.nextPage("electronics"), 8);
+  });
+});
+
+test("CatalogDb forgets a place once its walk runs out of listings", async () => {
+  await inDb(async (db) => {
+    await db.keepPlace("electronics", 40);
+    await db.forgetPlace("electronics");
+
+    // The department has been walked end to end, so the next walk starts at
+    // the top, where a listing puts what it has newly ranked.
+    assertEquals(await db.nextPage("electronics"), 1);
+  });
+});

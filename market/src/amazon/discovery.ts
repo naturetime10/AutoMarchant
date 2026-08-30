@@ -31,6 +31,8 @@ export interface DiscoveryOptions {
   imageLimit?: number;
   /** Read products already in the catalog again, rather than skipping them. */
   refresh?: boolean;
+  /** Walk each department from its first page, forgetting where one stopped. */
+  restart?: boolean;
   /** Breathing room between product pages, so the walk stays polite. */
   pauseMs?: number;
   /** Product pages read at once, a tab each; five of them by default. */
@@ -46,6 +48,7 @@ export class DiscoverySettings {
   readonly databaseUrl: string;
   readonly imageLimit: number;
   readonly refresh: boolean;
+  readonly restart: boolean;
   readonly pauseMs: number;
   readonly concurrency: number;
 
@@ -58,6 +61,7 @@ export class DiscoverySettings {
       "postgresql://localhost:5432/automerchant";
     this.imageLimit = options.imageLimit ?? Number.POSITIVE_INFINITY;
     this.refresh = options.refresh ?? false;
+    this.restart = options.restart ?? false;
     this.pauseMs = options.pauseMs ?? 1200;
     this.concurrency = options.concurrency ?? 5;
   }
@@ -96,6 +100,9 @@ export class DiscoverySettings {
         case "--refresh":
           options.refresh = true;
           break;
+        case "--restart":
+          options.restart = true;
+          break;
         case "--pause":
           options.pauseMs = wholeNumber(flag, value, 0);
           break;
@@ -105,8 +112,8 @@ export class DiscoverySettings {
         default:
           throw new Error(
             `Unknown discover option: ${arg}. Try --departments, --pages, ` +
-              "--products, --out, --database, --images, --refresh, --pause, " +
-              "or --concurrency.",
+              "--products, --out, --database, --images, --refresh, " +
+              "--restart, --pause, or --concurrency.",
           );
       }
     }
@@ -114,9 +121,26 @@ export class DiscoverySettings {
   }
 }
 
+/** The listings a walk reads, and the products they rank. */
+export interface Pages {
+  /** The ASINs one listing page ranks, in the order Amazon ranked them. */
+  list(department: Department, page: number): Promise<string[]>;
+
+  /** Reads the products of one page, across however many readers there are. */
+  each(
+    asins: Iterable<string>,
+    read: (asin: string, reader: Reader) => Promise<void>,
+  ): Promise<void>;
+}
+
+/** Whatever a walk reads a product page with; a browser tab, in a run. */
+export interface Reader {
+  read(asin: string, department: Department): Promise<Product | undefined>;
+}
+
 /**
- * Walks the storefront department by department: each listing page in turn,
- * then each product it ranks, writing what every detail page says.
+ * One `discover` run: the catalog it writes to and the tabs it reads with,
+ * opened once and handed to a walk of every department the run covers.
  */
 export class Discovery {
   constructor(
@@ -139,8 +163,9 @@ export class Discovery {
       this.log,
     );
     try {
+      const walk = new Walk(this.settings, tabs, catalog, this.log);
       for (const department of this.settings.departments) {
-        await this.walk(department, tabs, catalog);
+        await walk.of(department);
       }
     } finally {
       // The catalog is squared with the database first; the tabs go with the
@@ -149,58 +174,96 @@ export class Discovery {
       await tabs.close();
     }
   }
+}
 
-  private async walk(
-    department: Department,
-    tabs: Tabs,
-    catalog: Catalog,
-  ): Promise<void> {
-    await this.log.info(`${department.name} -> ${catalog.label}`);
+/**
+ * One department, walked page by page: each listing page in turn, then the
+ * products it ranks. Where the walk stopped is kept in the catalog, so the
+ * next walk of the department opens the page this one was reading rather than
+ * reading its way back down to it.
+ */
+export class Walk {
+  constructor(
+    private readonly settings: DiscoverySettings,
+    private readonly pages: Pages,
+    private readonly catalog: Catalog,
+    private readonly log: RunLog,
+  ) {}
+
+  /** Walks one department: each listing page in turn, then what it ranks. */
+  async of(department: Department): Promise<void> {
+    await this.log.info(`${department.name} -> ${this.catalog.label}`);
 
     const budget = new Budget(this.settings.maxProducts);
+    const first = await this.startOf(department);
+    // --pages caps the pages this run reads, not the page it may reach, so a
+    // resumed walk gets as many of them as a fresh one.
+    const last = first + this.settings.maxPages - 1;
+    if (first > 1) await this.log.info(`  picking up at page ${first}`);
     let previous = "";
 
-    for (let page = 1; page <= this.settings.maxPages; page++) {
-      const asins = await tabs.list(department, page);
+    for (let page = first; page <= last; page++) {
+      const asins = await this.pages.list(department, page);
       // Past the last page Amazon re-serves the previous one rather than 404.
       const signature = asins.join(",");
-      if (asins.length === 0 || signature === previous) break;
+      if (asins.length === 0 || signature === previous) {
+        // The listings are walked out: the next walk starts at the top,
+        // where what has newly been ranked appears.
+        await this.catalog.forgetPlace(department.slug);
+        break;
+      }
       previous = signature;
 
       await this.log.info(`  page ${page}: ${asins.length} products`);
       // The products a page ranks are read across every tab at once; a place
       // is claimed before a page is opened, so the cap holds however many
       // tabs are reading.
-      await tabs.each(asins, async (asin, tab) => {
+      await this.pages.each(asins, async (asin, reader) => {
         if (!budget.claim()) return;
-        if (!await this.capture(asin, department, tab, catalog)) {
+        if (!await this.capture(asin, department, reader)) {
           budget.release();
         }
       });
+      // A budget spent partway through a page leaves the rest of it unread,
+      // so the walk stays on that page rather than stepping over it.
+      await this.catalog.keepPlace(
+        department.slug,
+        budget.spent ? page : page + 1,
+      );
       if (budget.spent) break;
     }
 
     await this.log.info(
-      `  ${department.slug}: ${budget.claimed} new, ${await catalog.count(
+      `  ${department.slug}: ${budget.claimed} new, ${await this.catalog.count(
         department.slug,
       )} in total`,
     );
+  }
+
+  /**
+   * The page this walk opens with: where the last one stopped, so a walk cut
+   * short does not read its way back down the listings it has already read.
+   * A restart, and a refresh — which is there to read known products again —
+   * both start at the top instead.
+   */
+  private async startOf(department: Department): Promise<number> {
+    if (this.settings.restart || this.settings.refresh) return 1;
+    return await this.catalog.nextPage(department.slug);
   }
 
   /** Reads one product into the catalog; false when it added nothing. */
   private async capture(
     asin: string,
     department: Department,
-    tab: Tab,
-    catalog: Catalog,
+    reader: Reader,
   ): Promise<boolean> {
     // A refresh updates what is known and adds a capture to its history.
-    if (!this.settings.refresh && await catalog.has(asin)) return false;
+    if (!this.settings.refresh && await this.catalog.has(asin)) return false;
 
-    const product = await tab.read(asin, department);
+    const product = await reader.read(asin, department);
     if (!product) return false;
 
-    await catalog.save(product);
+    await this.catalog.save(product);
     await this.log.info(`    ${asin}  ${product.title ?? "(untitled)"}`);
     return true;
   }
@@ -211,7 +274,7 @@ export class Discovery {
  * reads those; the products a listing ranks are independent, so every tab
  * reads them at once.
  */
-class Tabs {
+class Tabs implements Pages {
   private readonly pool: WorkerPool<Tab>;
 
   private constructor(private readonly tabs: readonly Tab[]) {
@@ -237,7 +300,7 @@ class Tabs {
 
   each(
     asins: Iterable<string>,
-    read: (asin: string, tab: Tab) => Promise<void>,
+    read: (asin: string, reader: Reader) => Promise<void>,
   ): Promise<void> {
     return this.pool.run(asins, read);
   }
@@ -248,7 +311,7 @@ class Tabs {
 }
 
 /** One tab of the browser, reading whatever page it is pointed at. */
-class Tab {
+class Tab implements Reader {
   private readonly results: SearchResultsPage;
   private readonly product: ProductPage;
   private readonly gate: Interstitial;

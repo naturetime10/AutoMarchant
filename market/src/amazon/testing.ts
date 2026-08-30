@@ -23,17 +23,24 @@ export function test(name: string, fn: () => Promise<void>): void {
   Deno.test({ name, ignore: offline, fn });
 }
 
-/** Empties every table; the foreign keys carry it to what a product owns. */
+/**
+ * Empties every table; the foreign keys carry it to what a product owns. The
+ * tables are the ones the database actually has, rather than a list kept here
+ * in step with the schema — a database still waiting for its first test to
+ * create the schema has none, and nothing to empty.
+ */
 export async function truncate(): Promise<void> {
   const client = new Client(connection(TEST_DATABASE_URL));
   await client.connect();
   try {
-    await client.queryArray(
-      "TRUNCATE products, categories, attributes, features, images, reviews, " +
-        "questions, captures CASCADE",
+    const { rows } = await client.queryArray<[string]>(
+      `SELECT table_name FROM information_schema.tables
+       WHERE table_schema = 'public' AND table_type = 'BASE TABLE'`,
     );
-  } catch {
-    // Nothing to empty until the first test creates the schema.
+    if (rows.length === 0) return;
+
+    const tables = rows.map(([name]) => `"${name}"`).join(", ");
+    await client.queryArray(`TRUNCATE ${tables} CASCADE`);
   } finally {
     await client.end();
   }

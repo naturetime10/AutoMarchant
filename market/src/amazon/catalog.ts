@@ -42,6 +42,21 @@ export class Catalog {
     return this.turns.run(() => this.db.count(department));
   }
 
+  /** The listing page a walk of this department should open next. */
+  nextPage(department: string): Promise<number> {
+    return this.turns.run(() => this.db.nextPage(department));
+  }
+
+  /** Keeps the page a walk of this department is to be picked up at. */
+  keepPlace(department: string, page: number): Promise<void> {
+    return this.turns.run(() => this.db.keepPlace(department, page));
+  }
+
+  /** Drops the place kept for a department, sending its next walk to page 1. */
+  forgetPlace(department: string): Promise<void> {
+    return this.turns.run(() => this.db.forgetPlace(department));
+  }
+
   /** The images come off the network first, before a turn is taken. */
   async save(product: Product): Promise<void> {
     const images = await this.images.save(product.asin, product.images);

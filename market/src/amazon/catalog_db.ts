@@ -111,6 +111,15 @@ const SCHEMA = `
   -- rather than carried: a walk of Clothing can say what those carousels hold.
   DROP TABLE IF EXISTS styling_ideas;
 
+  -- Where a walk of a department stopped, so the next one opens the page it
+  -- was on rather than reading its way back down from the top. A department
+  -- walked end to end keeps no row: its next walk starts at the listings'
+  -- first page, which is where what has newly been ranked appears.
+  CREATE TABLE IF NOT EXISTS walks (
+    department TEXT PRIMARY KEY,
+    next_page INTEGER NOT NULL
+  );
+
   CREATE TABLE IF NOT EXISTS captures (
     asin TEXT NOT NULL REFERENCES products (asin) ON DELETE CASCADE,
     captured_at TIMESTAMPTZ NOT NULL,
@@ -175,6 +184,7 @@ export const TABLES = {
     "rating_count",
     "availability",
   ],
+  walks: ["department", "next_page"],
 } as const;
 
 export type TableName = keyof typeof TABLES;
@@ -342,6 +352,32 @@ export class CatalogDb {
       [department],
     );
     return rows[0][0];
+  }
+
+  /** The listing page a walk of this department should open next. */
+  async nextPage(department: string): Promise<number> {
+    const { rows } = await this.client.queryArray<[number]>(
+      "SELECT next_page FROM walks WHERE department = $1",
+      [department],
+    );
+    return rows[0]?.[0] ?? 1;
+  }
+
+  /** Keeps the page a walk of this department is to be picked up at. */
+  async keepPlace(department: string, page: number): Promise<void> {
+    await this.client.queryArray(
+      `INSERT INTO walks (department, next_page) VALUES ($1, $2)
+       ON CONFLICT (department) DO UPDATE SET next_page = excluded.next_page`,
+      [department, page],
+    );
+  }
+
+  /** Drops the place kept for a department, sending its next walk to page 1. */
+  async forgetPlace(department: string): Promise<void> {
+    await this.client.queryArray(
+      "DELETE FROM walks WHERE department = $1",
+      [department],
+    );
   }
 
   /** Writes a product and everything it owns, as one all-or-nothing step. */

@@ -94,9 +94,25 @@ A product already in the catalog is skipped, so a walk resumes where it left
 off. `--refresh` reads it again instead: the product is updated in place and a
 row is added to `captures`, which is how a price series accumulates.
 
+A walk also keeps its place in the listings, in `walks`: a department's row
+names the page its next walk opens, written once every product a page ranks
+has been read. So a walk stopped at page 40 — by `--products`, by a block, or
+by Ctrl-C — starts again at page 40 rather than reading its way back down to
+it. A page left half-read is not stepped over; it is read again, and the
+products it already has are the ones a rerun skips anyway. A department walked
+to the end of its listings keeps no place at all, so its next walk starts at
+page 1, where a listing puts what it has newly ranked. `--pages=N` counts the
+pages a run reads, not the page it may reach, so a resumed walk gets as many of
+them as a fresh one.
+
+`--restart` walks a department from page 1 and forgets where the last one
+stopped; `--refresh`, which is there to read known products again, starts at
+the top for the same reason.
+
 ```sh
 just market discover --departments=electronics,books --pages=2 --products=50
 just market discover --departments=electronics --refresh --images=0
+just market discover --departments=electronics --restart --pages=5
 just market discover --departments=electronics --concurrency=4
 ```
 
