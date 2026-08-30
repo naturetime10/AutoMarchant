@@ -23,7 +23,7 @@ const product: Product = {
   reviews: [],
 };
 
-test("Catalog saves the product, its image, and its CSV row together", async () => {
+test("Catalog saves the product and its image together", async () => {
   await truncate();
   const dir = await Deno.makeTempDir();
   const images = new ImageStore(
@@ -38,41 +38,7 @@ test("Catalog saves the product, its image, and its CSV row together", async () 
     assertEquals(await catalog.has("B000000001"), true);
     assertEquals(await catalog.count("electronics"), 1);
     assertEquals((await Deno.stat(`${dir}/images/B000000001/01.jpg`)).size, 1);
-
-    const rows = (await Deno.readTextFile(`${dir}/products.csv`)).trimEnd()
-      .split("\n");
-    assertEquals(rows.length, 2);
-    assertEquals(rows[1].startsWith("B000000001,"), true);
     await catalog.close();
-    const exported = (await Deno.readTextFile(`${dir}/products.csv`)).trimEnd()
-      .split("\n");
-    assertEquals(exported.length, 2);
-  } finally {
-    await Deno.remove(dir, { recursive: true });
-  }
-});
-
-test("Catalog leaves the CSV matching the catalog, not the visits", async () => {
-  await truncate();
-  const dir = await Deno.makeTempDir();
-  const images = new ImageStore(
-    dir,
-    () => Promise.resolve(new Uint8Array([1])),
-  );
-  const catalog = await Catalog.open(dir, TEST_DATABASE_URL, images);
-  try {
-    await catalog.save(product);
-    await catalog.save({ ...product, capturedAt: "2026-09-05T00:00:00.000Z" });
-    await catalog.close();
-
-    const products = (await Deno.readTextFile(`${dir}/products.csv`)).trimEnd()
-      .split("\n");
-    const captures = (await Deno.readTextFile(`${dir}/captures.csv`)).trimEnd()
-      .split("\n");
-
-    // One product, however often it was read; one capture per reading.
-    assertEquals(products.length, 2);
-    assertEquals(captures.length, 3);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
@@ -92,17 +58,13 @@ test("Catalog keeps concurrent saves from treading on each other", async () => {
   }));
   try {
     // A concurrent walk saves from several tabs at once; each product still
-    // has to land whole, and the CSV beside it row by row.
+    // has to land whole.
     await Promise.all(products.map((each) => catalog.save(each)));
 
     assertEquals(await catalog.count("electronics"), 8);
     for (const each of products) {
       assertEquals(await catalog.has(each.asin), true);
     }
-
-    const rows = (await Deno.readTextFile(`${dir}/products.csv`)).trimEnd()
-      .split("\n");
-    assertEquals(rows.length, 9);
     await catalog.close();
   } finally {
     await Deno.remove(dir, { recursive: true });
