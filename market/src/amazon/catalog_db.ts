@@ -106,12 +106,10 @@ const SCHEMA = `
     PRIMARY KEY (asin, position)
   );
 
-  CREATE TABLE IF NOT EXISTS styling_ideas (
-    asin TEXT NOT NULL REFERENCES products (asin) ON DELETE CASCADE,
-    position INTEGER NOT NULL,
-    idea TEXT NOT NULL,
-    PRIMARY KEY (asin, position)
-  );
+  -- A fashion carousel was read into styling_ideas before a fashion page had
+  -- ever been walked, and no product ever filled it. The guess is dropped
+  -- rather than carried: a walk of Clothing can say what those carousels hold.
+  DROP TABLE IF EXISTS styling_ideas;
 
   CREATE TABLE IF NOT EXISTS captures (
     asin TEXT NOT NULL REFERENCES products (asin) ON DELETE CASCADE,
@@ -168,7 +166,6 @@ export const TABLES = {
     "helpful_votes",
   ],
   questions: ["asin", "position", "question", "answer", "votes"],
-  styling_ideas: ["asin", "position", "idea"],
   captures: [
     "asin",
     "captured_at",
@@ -189,7 +186,6 @@ const OWNED: TableName[] = [
   "images",
   "reviews",
   "questions",
-  "styling_ideas",
 ];
 
 /** The catalog a walk fills in, as a Postgres database. */
@@ -432,11 +428,6 @@ export class CatalogDb {
         question.answer ?? null,
         question.votes ?? null,
       ]),
-    );
-
-    await this.insert(
-      "styling_ideas",
-      product.stylingIdeas.map((idea, index) => [asin, index + 1, idea]),
     );
 
     // A product read twice keeps both readings, which is the price series.

@@ -18,7 +18,6 @@ const product: Product = {
   details: {},
   variations: {},
   measurements: {},
-  stylingIdeas: [],
   questions: [],
   reviews: [],
 };
