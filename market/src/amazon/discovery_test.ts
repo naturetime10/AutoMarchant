@@ -93,3 +93,8 @@ Deno.test("settings reject an unknown flag rather than ignoring it", () => {
     "--everything",
   );
 });
+
+Deno.test("settings start a walk at the top when asked to restart", () => {
+  assertEquals(DiscoverySettings.parse([], DEFAULTS).restart, false);
+  assertEquals(DiscoverySettings.parse(["--restart"], DEFAULTS).restart, true);
+});
