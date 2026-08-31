@@ -1,12 +1,8 @@
 import { assertEquals, assertRejects } from "@std/assert";
 import { Catalog } from "./catalog.ts";
 import { type Department, selectDepartments } from "./departments.ts";
-import {
-  DiscoverySettings,
-  type Pages,
-  type Reader,
-  Walk,
-} from "./discovery.ts";
+import { DiscoverySettings, Walk } from "./discovery.ts";
+import type { Listing, Pages, Reader } from "./tabs.ts";
 import { Blocked } from "./interstitial.ts";
 import { ImageStore } from "./image_store.ts";
 import { RunLog } from "../run_log.ts";
@@ -36,11 +32,19 @@ class Listings implements Pages, Reader {
     private readonly missing: readonly string[] = [],
     /** The products Amazon turns the walk away from rather than serving. */
     private readonly blocked: readonly string[] = [],
+    /**
+     * The last page the paginator offers. Amazon goes on serving a grid past
+     * it, so the pages given may run deeper than the listings do.
+     */
+    private readonly lastPage = Math.max(...Object.keys(pages).map(Number)),
   ) {}
 
-  list(_department: Department, page: number): Promise<string[]> {
+  list(_department: Department, page: number): Promise<Listing> {
     this.opened.push(page);
-    return Promise.resolve(this.pages[page] ?? []);
+    return Promise.resolve({
+      asins: this.pages[page] ?? [],
+      more: page < this.lastPage,
+    });
   }
 
   async each(
@@ -63,6 +67,7 @@ class Listings implements Pages, Reader {
       capturedAt: "2026-08-30T00:00:00.000Z",
       title: `Product ${asin}`,
       breadcrumbs: [],
+      ranked: [],
       images: [],
       rating: {},
       store: {},
@@ -106,10 +111,13 @@ const walking = async (
 
 test("a walk opens the page the last walk of the department stopped on", async () => {
   await truncate();
+  // The listings run deeper than the pages given: what stops these walks is
+  // --pages, not the end of the department.
   const pages = { 3: ["B000000031"], 4: ["B000000041"] };
+  const listings = () => new Listings(pages, [], [], 9);
 
   await walking(
-    new Listings(pages),
+    listings(),
     ["--pages=2"],
     async (listings, catalog) => {
       // Nothing kept yet, so the first walk starts at the top.
@@ -119,7 +127,7 @@ test("a walk opens the page the last walk of the department stopped on", async (
   );
 
   await walking(
-    new Listings(pages),
+    listings(),
     ["--pages=2"],
     async (listings, catalog) => {
       assertEquals(listings.opened, [3, 4]);
@@ -134,7 +142,7 @@ test("a walk out of products leaves the rest of the page queued", async () => {
   const pages = { 1: ["B000000011", "B000000012", "B000000013"] };
 
   await walking(
-    new Listings(pages),
+    new Listings(pages, [], [], 9),
     ["--products=2"],
     async (_listings, catalog) => {
       assertEquals(await catalog.count("electronics"), 2);
@@ -150,13 +158,17 @@ test("a walk reads what an earlier one listed and never got to", async () => {
   await truncate();
   const first = { 1: ["B000000011", "B000000012", "B000000013"] };
 
-  await walking(new Listings(first), ["--products=1"], () => Promise.resolve());
+  await walking(
+    new Listings(first, [], [], 9),
+    ["--products=1"],
+    () => Promise.resolve(),
+  );
 
   // Amazon has re-ranked the department since: the two products the first
   // walk left unread are nowhere in the listings the second one is served.
   const second = { 1: ["B000000021"], 2: ["B000000022"] };
   await walking(
-    new Listings(second),
+    new Listings(second, [], [], 9),
     ["--pages=1"],
     async (listings, catalog) => {
       // The queue is read first, and in the order the listings ranked it;
@@ -223,9 +235,9 @@ test("a walk to the end of the listings forgets where it was", async () => {
   await truncate();
 
   await walking(
-    // Past the last page Amazon re-serves the one before it, which is how the
-    // listings end.
-    new Listings({ 1: ["B000000011"], 2: ["B000000011"] }),
+    // The paginator offers two pages and greys out "Next" on the second,
+    // which is how the listings end.
+    new Listings({ 1: ["B000000011"], 2: ["B000000021"] }),
     [],
     async (listings, catalog) => {
       assertEquals(listings.opened, [1, 2]);
@@ -240,10 +252,10 @@ test("a listing page that ranks nothing leaves the walk where it was", async () 
   await truncate();
 
   await walking(
-    // Page 2 comes back with nothing on it. That is not the end of the
-    // listings — the end re-serves the page before it — but a page Amazon
-    // would not draw.
-    new Listings({ 1: ["B000000011"] }),
+    // The paginator offers a page 2, and page 2 comes back with nothing on
+    // it. That is not the end of the listings — the paginator is what says
+    // that — but a page Amazon would not draw.
+    new Listings({ 1: ["B000000011"] }, [], [], 2),
     [],
     async (listings, catalog) => {
       assertEquals(listings.opened, [1, 2]);
@@ -364,6 +376,28 @@ test("only a queue an earlier walk left behind is reported as one", async () => 
         ["  1 queued by an earlier walk"],
       );
       return Promise.resolve();
+    },
+  );
+});
+
+test("a walk stops at the last page the listings offer", async () => {
+  await truncate();
+  const pages = {
+    1: ["B000000011"],
+    2: ["B000000021"],
+    3: ["B000000031"],
+  };
+
+  await walking(
+    // Amazon's paginator offers two pages. It goes on serving a grid past the
+    // last of them — recycled tiles, and a fresh one now and again — so a
+    // page that ranks products is no sign there is a page to rank them.
+    new Listings(pages, [], [], 2),
+    [],
+    async (listings, catalog) => {
+      assertEquals(listings.opened, [1, 2]);
+      // The listings are listed out, so the next walk starts at the top.
+      assertEquals(await catalog.nextPage("electronics"), 1);
     },
   );
 });

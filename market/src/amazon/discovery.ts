@@ -1,5 +1,5 @@
-import type { BrowserContext, Page } from "playwright";
-import { Budget, WorkerPool } from "../concurrency.ts";
+import type { BrowserContext } from "playwright";
+import { Budget } from "../concurrency.ts";
 import { Catalog } from "./catalog.ts";
 import type { Diagnostics } from "./diagnostics.ts";
 import {
@@ -7,19 +7,12 @@ import {
   DEPARTMENTS,
   selectDepartments,
 } from "./departments.ts";
+import { Flags } from "../flags.ts";
 import { ImageStore } from "./image_store.ts";
-import { BLOCK_REASON, Blocked, Interstitial } from "./interstitial.ts";
-import type { Product } from "./product.ts";
-import { ProductPage } from "./product_page.ts";
-import { SearchResultsPage } from "./search_results_page.ts";
+import type { Pages, Reader } from "./tabs.ts";
+import { Tabs } from "./tabs.ts";
 import type { RunLog } from "../run_log.ts";
 import type { AmazonUrls } from "./urls.ts";
-
-/** How many times a blocked page is asked for again before giving up. */
-const MAX_RETRIES = 3;
-
-/** How long to wait out the first block; each retry waits twice as long. */
-const FIRST_BACKOFF_MS = 5_000;
 
 export interface DiscoveryOptions {
   departments?: readonly Department[];
@@ -72,71 +65,33 @@ export class DiscoverySettings {
     args: string[],
     defaults: { outputDir: string; databaseUrl: string; concurrency: number },
   ): DiscoverySettings {
-    const options: DiscoveryOptions = { ...defaults };
+    const flags = new Flags(args, "discover", [
+      "departments",
+      "pages",
+      "products",
+      "out",
+      "database",
+      "images",
+      "refresh",
+      "restart",
+      "pause",
+      "concurrency",
+    ]);
+    const departments = flags.words("departments");
 
-    for (const arg of args) {
-      const separator = arg.indexOf("=");
-      const flag = separator === -1 ? arg : arg.slice(0, separator);
-      const value = separator === -1 ? "" : arg.slice(separator + 1);
-
-      switch (flag) {
-        case "--departments":
-          options.departments = selectDepartments(value.split(","));
-          break;
-        case "--pages":
-          options.maxPages = wholeNumber(flag, value, 1);
-          break;
-        case "--products":
-          options.maxProducts = wholeNumber(flag, value, 1);
-          break;
-        case "--out":
-          options.outputDir = value;
-          break;
-        case "--database":
-          options.databaseUrl = value;
-          break;
-        case "--images":
-          options.imageLimit = wholeNumber(flag, value, 0);
-          break;
-        case "--refresh":
-          options.refresh = true;
-          break;
-        case "--restart":
-          options.restart = true;
-          break;
-        case "--pause":
-          options.pauseMs = wholeNumber(flag, value, 0);
-          break;
-        case "--concurrency":
-          options.concurrency = wholeNumber(flag, value, 1);
-          break;
-        default:
-          throw new Error(
-            `Unknown discover option: ${arg}. Try --departments, --pages, ` +
-              "--products, --out, --database, --images, --refresh, " +
-              "--restart, --pause, or --concurrency.",
-          );
-      }
-    }
-    return new DiscoverySettings(options);
+    return new DiscoverySettings({
+      departments: departments && selectDepartments(departments),
+      maxPages: flags.count("pages", 1),
+      maxProducts: flags.count("products", 1),
+      outputDir: flags.text("out") ?? defaults.outputDir,
+      databaseUrl: flags.text("database") ?? defaults.databaseUrl,
+      imageLimit: flags.count("images", 0),
+      refresh: flags.given("refresh"),
+      restart: flags.given("restart"),
+      pauseMs: flags.count("pause", 0),
+      concurrency: flags.count("concurrency", 1) ?? defaults.concurrency,
+    });
   }
-}
-
-/** The listings a walk reads, and the products they rank. */
-export interface Pages {
-  /** The ASINs one listing page ranks, in the order Amazon ranked them. */
-  list(department: Department, page: number): Promise<string[]>;
-
-  /** Reads the products of one page, across however many readers there are. */
-  each(
-    asins: Iterable<string>,
-    read: (asin: string, reader: Reader) => Promise<void>,
-  ): Promise<void>;
-}
-
-/** Whatever a walk reads a product page with; a browser tab, in a run. */
-export interface Reader {
-  read(asin: string, department: Department): Promise<Product | undefined>;
 }
 
 /**
@@ -232,38 +187,36 @@ export class Walk {
     // resumed walk gets as many of them as a fresh one.
     const last = first + this.settings.maxPages - 1;
     if (first > 1) await this.log.info(`  listing from page ${first}`);
-    let previous = "";
 
     for (let page = first; page <= last && !budget.spent; page++) {
-      const asins = await this.pages.list(department, page);
-      if (asins.length === 0) {
-        // Not the end of the listings — the end re-serves the page before it
-        // — but a page that ranked nothing because it never drew. The place
-        // is kept, so the next walk asks for this page rather than taking the
+      const listing = await this.pages.list(department, page);
+      if (listing.asins.length === 0) {
+        // Not the end of the listings — the paginator is what says that — but
+        // a page that ranked nothing because it never drew. The place is
+        // kept, so the next walk asks for this page rather than taking the
         // department for one that has been read to the end.
         await this.log.error(`  page ${page}: nothing ranked; stopping here`);
         return;
       }
-      // Past the last page Amazon re-serves the previous one rather than 404.
-      const signature = asins.join(",");
-      if (signature === previous) {
-        // The listings are listed out: the next walk starts at the top, where
-        // what has newly been ranked appears.
-        await this.catalog.forgetPlace(department.slug);
-        return;
-      }
-      previous = signature;
 
-      await this.log.info(`  page ${page}: ${asins.length} products`);
+      await this.log.info(`  page ${page}: ${listing.asins.length} products`);
       // The page is queued before a product of it is read, so the walk has no
       // reason to open the page again: whatever it does not get to now is in
       // the queue, and read by the walk after it.
-      await this.catalog.listed(department.slug, page, asins);
+      await this.catalog.listed(department.slug, page, listing.asins);
       await this.catalog.keepPlace(department.slug, page + 1);
       const due = this.settings.refresh
-        ? asins
+        ? listing.asins
         : await this.catalog.unread(department.slug);
       await this.read(department, budget, tried, due);
+
+      if (!listing.more) {
+        // Amazon's paginator offers nothing after this page, and the page has
+        // been read: the listings are listed out. The next walk starts at the
+        // top, where what has newly been ranked appears.
+        await this.catalog.forgetPlace(department.slug);
+        return;
+      }
     }
   }
 
@@ -339,150 +292,4 @@ export class Walk {
     await this.log.info(`    ${asin}  ${product.title ?? "(untitled)"}`);
     return true;
   }
-}
-
-/**
- * The tabs a walk reads with. Listing pages are taken in order, so one tab
- * reads those; the products a listing ranks are independent, so every tab
- * reads them at once.
- */
-class Tabs implements Pages {
-  private readonly pool: WorkerPool<Tab>;
-
-  private constructor(private readonly tabs: readonly Tab[]) {
-    this.pool = new WorkerPool(tabs);
-  }
-
-  static async open(
-    context: BrowserContext,
-    settings: DiscoverySettings,
-    urls: AmazonUrls,
-    log: RunLog,
-    diagnostics: Diagnostics,
-  ): Promise<Tabs> {
-    const tabs: Tab[] = [];
-    for (let index = 0; index < settings.concurrency; index++) {
-      tabs.push(
-        new Tab(await context.newPage(), urls, settings, log, diagnostics),
-      );
-    }
-    return new Tabs(tabs);
-  }
-
-  list(department: Department, page: number): Promise<string[]> {
-    return this.tabs[0].asins(department, page);
-  }
-
-  each(
-    asins: Iterable<string>,
-    read: (asin: string, reader: Reader) => Promise<void>,
-  ): Promise<void> {
-    return this.pool.run(asins, read);
-  }
-
-  async close(): Promise<void> {
-    await Promise.all(this.tabs.map((tab) => tab.close()));
-  }
-}
-
-/** One tab of the browser, reading whatever page it is pointed at. */
-class Tab implements Reader {
-  private readonly results: SearchResultsPage;
-  private readonly product: ProductPage;
-  private readonly gate: Interstitial;
-
-  constructor(
-    private readonly page: Page,
-    private readonly urls: AmazonUrls,
-    private readonly settings: DiscoverySettings,
-    private readonly log: RunLog,
-    private readonly diagnostics: Diagnostics,
-  ) {
-    this.results = new SearchResultsPage(page);
-    this.product = new ProductPage(page);
-    this.gate = new Interstitial(page);
-  }
-
-  /** The ASINs one listing page ranks, in the order Amazon ranked them. */
-  async asins(department: Department, page: number): Promise<string[]> {
-    await this.visit(this.urls.department(department.node, page));
-    if (!await this.results.waitForResults()) return [];
-    return await this.results.asins();
-  }
-
-  /** Reads one product; a page that will not load costs that product only. */
-  async read(
-    asin: string,
-    department: Department,
-  ): Promise<Product | undefined> {
-    try {
-      await this.visit(this.urls.product(asin));
-      if (!await this.product.waitForProduct()) {
-        await this.log.error(`    ${asin}  skipped: no product page`);
-        return undefined;
-      }
-
-      const product = await this.product.read(asin, department.slug);
-      await this.page.waitForTimeout(this.settings.pauseMs);
-      return product;
-    } catch (error) {
-      // A page Amazon refused says nothing about the product behind it, so
-      // the walk stops on it rather than spending one of the product's tries.
-      if (error instanceof Blocked) throw error;
-      await this.log.error(
-        `    ${asin}  skipped: ${
-          error instanceof Error ? error.message : error
-        }`,
-      );
-      return undefined;
-    }
-  }
-
-  close(): Promise<void> {
-    return this.page.close();
-  }
-
-  /**
-   * Opens a page, clearing whatever Amazon serves in its place and asking
-   * again. A block means the walk is reading too quickly, so each retry waits
-   * longer than the last; one that outlasts them is raised rather than
-   * returned, so a blocked walk says so instead of recording an empty
-   * department.
-   */
-  private async visit(url: string): Promise<void> {
-    let answer = await this.page.goto(url, { waitUntil: "domcontentloaded" });
-
-    let backoffMs = FIRST_BACKOFF_MS;
-    for (let retry = 1; retry <= MAX_RETRIES; retry++) {
-      const block = await this.gate.block(answer?.status());
-      if (block === "none") return;
-
-      await this.log.error(
-        `    ${BLOCK_REASON[block]}; waiting ${backoffMs / 1000}s and asking ` +
-          `again (${retry}/${MAX_RETRIES})`,
-      );
-      await this.gate.dismiss(block);
-      await this.page.waitForTimeout(backoffMs);
-      backoffMs *= 2;
-      answer = await this.page.goto(url, { waitUntil: "domcontentloaded" });
-    }
-
-    const block = await this.gate.block(answer?.status());
-    if (block !== "none") {
-      // The tabs are closed as the walk unwinds, so what Amazon served is
-      // recorded here, while the page that would not come is still open.
-      await this.diagnostics.save(this.page);
-      throw new Blocked(
-        `${BLOCK_REASON[block]} for ${url}, ${MAX_RETRIES + 1} times over`,
-      );
-    }
-  }
-}
-
-function wholeNumber(flag: string, value: string, minimum: number): number {
-  const parsed = Number(value);
-  if (!Number.isInteger(parsed) || parsed < minimum) {
-    throw new Error(`${flag} takes a whole number of at least ${minimum}.`);
-  }
-  return parsed;
 }

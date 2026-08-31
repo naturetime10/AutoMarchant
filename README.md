@@ -19,6 +19,7 @@ Deno + Playwright automation for a personal Amazon account.
 cp market/.env.example market/.env   # then fill in AMAZON_EMAIL / AMAZON_PASSWORD
 just market run                      # sign in
 just market discover                 # walk every department, product by product
+just market audit                    # check what the catalog holds against Amazon
 ```
 
 Secrets and settings are kept apart. `market/.env` holds the secrets — the
@@ -64,14 +65,30 @@ row of its own rather than being folded into a cell as JSON.
 
 A product's trail — `Home & Kitchen > Kitchen & Dining > Small Appliances >
 Blenders > Personal Size Blenders` — is a tree rather than a sentence, so it
-lives in `categories`: a row per node naming the parent it hangs from, with
-`products.category_id` pointing at the leaf. A branch that two trails share is
-one row, so what sits under `Kitchen & Dining` is a walk down `parent_id`
-rather than a match against a string, and the same column walks back up to read
-a trail out. A node's name is unique among its siblings and nowhere else, which
-is what lets `Accessories` sit under both `Electronics` and `Books` without the
-two being confused. A catalog that still holds its trails in a cell grows the
-tree from them the next time it is opened.
+lives in `categories`: a row per node naming the parent it hangs from. A branch
+that two trails share is one row, so what sits under `Kitchen & Dining` is a
+walk down `parent_id` rather than a match against a string, and the same column
+walks back up to read a trail out. A node's name is unique among its siblings
+and nowhere else, which is what lets `Accessories` sit under both `Electronics`
+and `Books` without the two being confused. A catalog that still holds its
+trails in a cell grows the tree from them the next time it is opened.
+
+A product sits in more than one of them, so which categories it is filed under
+is `product_categories` rather than a column. Its trail names one, and its
+Best Sellers Rank names the rest: *How to Talk to Your Cat About Gun Safety* is
+`Books > Crafts, Hobbies & Home > Pets & Animal Care > Cats > Breeds` by its
+trail, and `Cat Training` and `Animal Behavior & Communication` by its rank. A
+catalog that still files each product under one category folds that column into
+the table the next time it is opened.
+
+Amazon writes the same category differently in the two places — the book's rank
+calls its trail's own leaf `Cat Breeds (Books)`, where the trail calls it
+`Breeds` — so `categories.node` keeps the browse node behind each, which is
+Amazon's own name for it. Two rows are one category when the node says so. A
+rank names a category without saying where it hangs, so one met that way sits
+at the top of the tree, beside the departments, until a trail passes through it
+and says where it belongs. A catalog written before the node was read has none,
+and picks them up as its products are read again.
 
 ```sh
 psql "$DATABASE_URL" -c \
@@ -79,7 +96,9 @@ psql "$DATABASE_URL" -c \
      SELECT id FROM categories WHERE parent_id IS NULL AND name = 'Home & Kitchen'
      UNION ALL
      SELECT c.id FROM categories c JOIN sub ON c.parent_id = sub.id)
-   SELECT p.title, p.price FROM products p JOIN sub ON sub.id = p.category_id
+   SELECT DISTINCT p.title, p.price FROM products p
+     JOIN product_categories pc ON pc.asin = p.asin
+     JOIN sub ON sub.id = pc.category_id
    ORDER BY p.price"
 ```
 
@@ -105,6 +124,16 @@ up even though Amazon has re-ranked the department since: a product that has
 moved to another page, or off the listings entirely, is still queued under the
 ASIN it was ranked by.
 
+The end of a department is the paginator's to say. Amazon caps a department at
+four hundred pages, and asked for the four thousandth it answers with a grid
+anyway — tiles recycled from pages already walked, ordered differently each
+time, under a count that has stopped making sense. Nothing in the grid says it
+is not the department, so a walk that goes by what a page ranked never stops:
+one walked into page 9,462 of Appliances, a page a second, finding a product
+now and again. The paginator is what tells them apart. It greys "Next" out on
+the last page and stops being drawn past it, so a walk reads the page it is on
+and stops where the paginator does.
+
 A department listed to the end keeps no place, so its next walk lists from page
 1 again, where what has newly been ranked appears — and the products that walk
 has already read stay out of the queue. `--pages=N` counts the pages a run
@@ -118,8 +147,8 @@ three times, each wait twice the last. One that outlasts them stops the run.
 A page Amazon would not serve says nothing about what is behind it, so a
 blocked department keeps its place and a blocked product keeps its tries, and
 the next walk picks up where this one was turned away; the page that would not
-come is written to `artifacts/`. Only Amazon re-serving the page before it —
-what it sends in place of a 404 — ends a department's listings.
+come is written to `artifacts/`. A page that ranked nothing ends nothing
+either: the place is kept, and the next walk asks for that page again.
 
 A product page that will not load is asked for again by the next walk, and by
 the one after that; a fourth leaves it alone, so a walk does not open the same
@@ -168,3 +197,53 @@ rather than the machine or the address. So `discover` reads in a profile of
 its own (`market/.playwright/walk`, `walk_data_dir` under `[browser]`), which
 the account's cookies never reach. Signing in stays a command of its own for
 the pages that do need an account.
+
+`audit` checks the records already in the catalog against the pages behind
+them. It reads a product page the way a walk does and compares what comes back
+with the row the catalog holds, column by column: a price that has moved, a
+title Amazon has rewritten, a rating that has taken another vote. The ASIN, the
+URL, the department and the moment of the reading are not judged — the URL is
+whatever Amazon redirected the ASIN to on the day, and the capture differs by
+definition.
+
+Every record checked gets a verdict in `audits` — `matches`, `differs`, or
+`gone`, which is a record whose page would not come, asked for twice — and every
+column that disagreed gets a row in `audit_differences` naming what the catalog
+holds and what the page says instead. The run's progress goes to `audit.log`,
+beside the walk's own log.
+
+```sh
+psql "$DATABASE_URL" -c \
+  "SELECT a.asin, d.field, d.stored, d.found
+     FROM audits a JOIN audit_differences d USING (asin)
+    WHERE a.verdict = 'differs' ORDER BY a.checked_at DESC LIMIT 20"
+```
+
+An audit reads and reports; it changes no record it disagrees with unless it
+is asked to. `--fix` is what asks: a record the page has moved on from is
+written as the page reads now — images and all, the reading joining the price
+series in `captures` like any other — and its verdict is `fixed` rather than
+`differs`, with the differences kept beside it to say what the record used to
+hold. A record with no page left behind it is not one a rescan can put right,
+so `gone` is reported and left where it is, for you to decide about. Under a
+tabful of readers a page Amazon is slow to serve looks exactly like a page
+that is not there, so the audit asks a second time before calling a record
+gone — and every pass reads every record, so one buried wrongly comes back on
+the next.
+
+A record a walk writes again drops its audit with it: one just read is one
+nobody has checked. So a plain `audit` is the report `--fix` acts on, and
+running the fix straight away is the same work in one pass.
+
+The records it has been longest since checking go first, and the ones it has
+never checked before those, so `--products=N` works a department through over
+as many runs as it takes rather than checking the same first N every time.
+The rest is a walk's: an audit reads signed out in the walk's own profile,
+waits out a block and asks again, and reads `--concurrency=N` pages at once.
+
+```sh
+just market audit --departments=books,electronics --products=50
+just market audit --departments=appliances --concurrency=2 --pause=2000
+just market audit --fix                   # rescan every record, and square it
+just market audit --fix --images=0        # square the rows, fetch no images
+```

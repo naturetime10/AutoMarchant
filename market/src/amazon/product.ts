@@ -15,6 +15,17 @@ export interface Rating {
   count?: number;
 }
 
+/**
+ * One category Amazon files a product under. The browse node is its identity
+ * where a link named one: Amazon writes the same category differently in
+ * different places — "Breeds" at the end of a trail, "Cat Breeds (Books)" in
+ * a rank — and the node is what says the two are one category.
+ */
+export interface Category {
+  name: string;
+  node?: string;
+}
+
 /** The brand storefront behind the product and the merchant filling orders. */
 export interface Store {
   name?: string;
@@ -52,7 +63,15 @@ export interface Product {
   brand?: string;
   /** Who wrote it, on a page whose byline names contributors, not a brand. */
   author?: string;
-  breadcrumbs: string[];
+  /** The trail Amazon draws above the product, root first. */
+  breadcrumbs: Category[];
+  /**
+   * The categories Amazon's Best Sellers Rank names. A product sits in more
+   * than the one its trail draws, and the rank is where it says so — often
+   * the trail's own leaf under another name, sometimes a category the trail
+   * never passes through.
+   */
+  ranked: Category[];
   images: string[];
   price?: Money;
   listPrice?: Money;
@@ -84,12 +103,19 @@ export interface RawReview {
   helpfulText: string | null;
 }
 
+/** A category link as it reads: its text, and the node its href named. */
+export interface RawCategory {
+  name: string;
+  node: string | null;
+}
+
 /** A product detail page as it reads, before any of it is interpreted. */
 export interface RawProduct {
   title: string | null;
   byline: string | null;
   bylineUrl: string | null;
-  breadcrumbs: string[];
+  breadcrumbs: RawCategory[];
+  ranked: RawCategory[];
   images: string[];
   price: string | null;
   listPrice: string | null;
@@ -137,7 +163,11 @@ export function toProduct(
     ...optional("title", cleanText(raw.title)),
     ...optional("brand", brand),
     ...optional("author", author),
-    breadcrumbs: texts(raw.breadcrumbs),
+    breadcrumbs: categories(raw.breadcrumbs),
+    // A rank link without a node names a store's bestseller list rather than
+    // a category. Without one there is no telling it from the trail's own
+    // leaf, which Amazon writes there under a name of its own, so it is left.
+    ranked: categories(raw.ranked).filter((category) => category.node),
     images: unique(raw.images),
     ...optionalValue("price", parseMoney(raw.price)),
     ...optionalValue("listPrice", parseMoney(raw.listPrice)),
@@ -284,4 +314,14 @@ function optionalValue<K extends string, V>(
   value: V | undefined,
 ): Partial<Record<K, V>> {
   return value === undefined ? {} : { [key]: value } as Record<K, V>;
+}
+
+/** The category links that named something, tidied. */
+function categories(raw: RawCategory[]): Category[] {
+  return raw
+    .map(({ name, node }) => ({
+      name: cleanText(name),
+      ...(node ? { node } : {}),
+    }))
+    .filter((category) => category.name !== "");
 }

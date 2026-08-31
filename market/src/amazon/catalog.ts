@@ -1,3 +1,4 @@
+import type { Finding } from "./audit.ts";
 import { Mutex } from "../concurrency.ts";
 import { CatalogDb } from "./catalog_db.ts";
 import type { ImageStore } from "./image_store.ts";
@@ -79,6 +80,21 @@ export class Catalog {
   /** Drops the place kept for a department, sending its next walk to page 1. */
   forgetPlace(department: string): Promise<void> {
     return this.turns.run(() => this.db.forgetPlace(department));
+  }
+
+  /** The records of a department due to be checked against Amazon. */
+  toAudit(department: string, limit: number): Promise<string[]> {
+    return this.turns.run(() => this.db.toAudit(department, limit));
+  }
+
+  /** The row the catalog holds for a product, in the columns' own order. */
+  record(asin: string): Promise<unknown[] | undefined> {
+    return this.turns.run(() => this.db.record(asin));
+  }
+
+  /** Keeps what an audit made of a record. */
+  audited(finding: Finding): Promise<void> {
+    return this.turns.run(() => this.db.audited(finding));
   }
 
   /** The images come off the network first, before a turn is taken. */

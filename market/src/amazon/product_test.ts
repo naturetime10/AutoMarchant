@@ -5,7 +5,15 @@ const raw: RawProduct = {
   title: "  Anker USB C Cable\n ",
   byline: "Visit the Anker Store",
   bylineUrl: "https://www.amazon.com/stores/Anker/page/1",
-  breadcrumbs: ["Electronics", " Accessories ", ""],
+  breadcrumbs: [
+    { name: "Electronics", node: "172282" },
+    { name: " Accessories ", node: null },
+    { name: "", node: null },
+  ],
+  ranked: [
+    { name: "USB Cables", node: "9979383011" },
+    { name: "See Top 100 in Electronics", node: null },
+  ],
   images: ["https://m.media-amazon.com/images/I/1.jpg"],
   price: "$12.99",
   listPrice: "$19.99",
@@ -58,7 +66,6 @@ Deno.test("toProduct keeps the identity of the page it came from", () => {
 
 Deno.test("toProduct tidies the text Amazon renders", () => {
   assertEquals(product.title, "Anker USB C Cable");
-  assertEquals(product.breadcrumbs, ["Electronics", "Accessories"]);
   assertEquals(product.features, ["Fast charging"]);
   assertEquals(product.availability, "In Stock");
   assertEquals(product.description, "A braided cable.");
@@ -190,4 +197,20 @@ Deno.test("toProduct keeps the authors among a book's contributors", () => {
   );
   assertEquals(authorOf("by Jane Doe"), "Jane Doe");
   assertEquals(authorOf("Visit the Anker Store"), undefined);
+});
+
+Deno.test("toProduct keeps the browse node a category link named", () => {
+  assertEquals(product.breadcrumbs.map((c) => [c.name, c.node ?? null]), [
+    ["Electronics", "172282"],
+    ["Accessories", null],
+  ]);
+});
+
+Deno.test("toProduct takes the categories a rank names, where it names a node", () => {
+  // "See Top 100 in Electronics" links a store's bestseller list rather than a
+  // category, so it names no node — and a category that cannot be told apart
+  // from the trail's own leaf is not one this catalog can file a product under.
+  assertEquals(product.ranked.map((c) => [c.name, c.node ?? null]), [
+    ["USB Cables", "9979383011"],
+  ]);
 });

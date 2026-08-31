@@ -24,3 +24,8 @@ fmt:
 # Options: --departments=books,electronics --pages=N --products=N --images=N --out=DIR --pause=MS --concurrency=N --refresh --restart
 discover *options:
     deno run -A --env-file=.env main.ts discover {{ options }}
+
+# Check what the catalog holds against the pages behind it; --fix squares it.
+# Options: --departments=books --products=N --out=DIR --pause=MS --concurrency=N --images=N --fix
+audit *options:
+    deno run -A --env-file=.env main.ts audit {{ options }}

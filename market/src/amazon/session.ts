@@ -3,6 +3,7 @@ import type { Config } from "../config.ts";
 import type { Credentials } from "../credentials.ts";
 import { OtpSource } from "../otp.ts";
 import { RunLog } from "../run_log.ts";
+import { Audit, type AuditSettings } from "./audit.ts";
 import { Diagnostics } from "./diagnostics.ts";
 import { Discovery, type DiscoverySettings } from "./discovery.ts";
 import { SignInPage, type SignInStep } from "./sign_in_page.ts";
@@ -98,6 +99,18 @@ export class AmazonSession {
   async discover(settings: DiscoverySettings): Promise<void> {
     const log = await RunLog.open(settings.outputDir);
     await new Discovery(
+      this.context,
+      new AmazonUrls(),
+      settings,
+      log,
+      this.diagnostics,
+    ).run();
+  }
+
+  /** Checks the records the catalog holds against the pages behind them. */
+  async audit(settings: AuditSettings): Promise<void> {
+    const log = await RunLog.open(settings.outputDir, "audit.log");
+    await new Audit(
       this.context,
       new AmazonUrls(),
       settings,
