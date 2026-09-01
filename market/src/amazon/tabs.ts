@@ -2,15 +2,28 @@ import type { BrowserContext, Page } from "playwright";
 import { WorkerPool } from "../concurrency.ts";
 import type { Diagnostics } from "./diagnostics.ts";
 import type { Department } from "./departments.ts";
-import { BLOCK_REASON, Blocked, Interstitial } from "./interstitial.ts";
+import {
+  type Block,
+  BLOCK_REASON,
+  Blocked,
+  Interstitial,
+  unanswered,
+} from "./interstitial.ts";
 import type { Product } from "./product.ts";
 import { ProductPage } from "./product_page.ts";
 import { SearchResultsPage } from "./search_results_page.ts";
 import type { RunLog } from "../run_log.ts";
 import type { AmazonUrls } from "./urls.ts";
 
-/** How many times a blocked page is asked for again before giving up. */
-const MAX_RETRIES = 3;
+/**
+ * How many times a blocked page is asked for again before giving up. The
+ * doubling below turns this into how long a walk will wait out a block: five
+ * retries wait a little over two and a half minutes in total, and a walk
+ * Amazon has gone quiet on spends thirty seconds timing out before each of
+ * them, so it holds on for about five minutes before it stops. That is longer
+ * than the throttles seen so far, which have run a minute or two.
+ */
+const MAX_RETRIES = 5;
 
 /** How long to wait out the first block; each retry waits twice as long. */
 const FIRST_BACKOFF_MS = 5_000;
@@ -100,7 +113,7 @@ export class Tabs implements Pages {
 }
 
 /** One tab of the browser, reading whatever page it is pointed at. */
-class Tab implements Reader {
+export class Tab implements Reader {
   private readonly results: SearchResultsPage;
   private readonly product: ProductPage;
   private readonly gate: Interstitial;
@@ -167,11 +180,10 @@ class Tab implements Reader {
    * department.
    */
   private async visit(url: string): Promise<void> {
-    let answer = await this.page.goto(url, { waitUntil: "domcontentloaded" });
+    let block = await this.open(url);
 
     let backoffMs = FIRST_BACKOFF_MS;
     for (let retry = 1; retry <= MAX_RETRIES; retry++) {
-      const block = await this.gate.block(answer?.status());
       if (block === "none") return;
 
       await this.log.error(
@@ -181,10 +193,9 @@ class Tab implements Reader {
       await this.gate.dismiss(block);
       await this.page.waitForTimeout(backoffMs);
       backoffMs *= 2;
-      answer = await this.page.goto(url, { waitUntil: "domcontentloaded" });
+      block = await this.open(url);
     }
 
-    const block = await this.gate.block(answer?.status());
     if (block !== "none") {
       // The tabs are closed as the run unwinds, so what Amazon served is
       // recorded here, while the page that would not come is still open.
@@ -192,6 +203,24 @@ class Tab implements Reader {
       throw new Blocked(
         `${BLOCK_REASON[block]} for ${url}, ${MAX_RETRIES + 1} times over`,
       );
+    }
+  }
+
+  /**
+   * Asks for a page once: which block it met, if any. A navigation that never
+   * came back is one of them rather than an error of its own — Amazon turning
+   * a walk away by going quiet — so it is waited out and asked for again like
+   * the blocks that do render.
+   */
+  private async open(url: string): Promise<Block> {
+    try {
+      const answer = await this.page.goto(url, {
+        waitUntil: "domcontentloaded",
+      });
+      return await this.gate.block(answer?.status());
+    } catch (error) {
+      if (unanswered(error)) return "unanswered";
+      throw error;
     }
   }
 }

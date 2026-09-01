@@ -1,5 +1,5 @@
 import { assertEquals } from "@std/assert";
-import { refused } from "./interstitial.ts";
+import { Blocked, refused, unanswered } from "./interstitial.ts";
 
 Deno.test("a status Amazon will not serve a page with is a block", () => {
   // What a walk reading too quickly is answered with, whatever the page it is
@@ -15,4 +15,27 @@ Deno.test("an answer about the page itself is not a block", () => {
   // whole run over one dead ASIN.
   assertEquals(refused(404), false);
   assertEquals(refused(undefined), false);
+});
+
+Deno.test("a page that never arrived is a block", () => {
+  // What Amazon does to a walk it has decided is reading too much: it stops
+  // answering rather than saying no, so the navigation times out.
+  const timeout = new Error("page.goto: Timeout 30000ms exceeded.");
+  timeout.name = "TimeoutError";
+  assertEquals(unanswered(timeout), true);
+
+  // The connection dropped part way through is the same event, seen from the
+  // other end.
+  assertEquals(
+    unanswered(new Error("page.goto: net::ERR_CONNECTION_RESET at https://…")),
+    true,
+  );
+});
+
+Deno.test("an error about the page itself is not a block", () => {
+  // The page arrived and the run made something of it; asking again would
+  // only meet the same page.
+  assertEquals(unanswered(new TypeError("selector is not a function")), false);
+  assertEquals(unanswered(new Blocked("Amazon refused the page")), false);
+  assertEquals(unanswered("not an error at all"), false);
 });

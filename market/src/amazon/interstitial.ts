@@ -19,13 +19,19 @@ const CONTINUE = [
 const UNAVAILABLE = "a[href*='cs_503'], img[alt='Dogs of Amazon']";
 
 /** Whichever page Amazon served in place of the one asked for. */
-export type Block = "continue-shopping" | "unavailable" | "refused" | "none";
+export type Block =
+  | "continue-shopping"
+  | "unavailable"
+  | "refused"
+  | "unanswered"
+  | "none";
 
 /** What each block is called in the log. */
 export const BLOCK_REASON: Record<Exclude<Block, "none">, string> = {
   "continue-shopping": 'Amazon served its "Continue shopping" gate',
   "unavailable": "Amazon served its 503 page",
   "refused": "Amazon refused the page",
+  "unanswered": "Amazon never answered",
 };
 
 /**
@@ -43,6 +49,21 @@ export class Blocked extends Error {}
  */
 export function refused(status?: number): boolean {
   return status !== undefined && (status === 429 || status >= 500);
+}
+
+/**
+ * Whether a navigation failed because the page never arrived at all.
+ *
+ * It is the quietest way Amazon turns a walk away: rather than answering with
+ * a gate or a 503, it stops answering, and the navigation times out. A
+ * connection dropped part way through is the same event seen from the other
+ * end. Either way nothing came back, so nothing has been learned about the
+ * page — which makes it a block like the rest, to be waited out and asked for
+ * again, rather than an error to end the run on.
+ */
+export function unanswered(error: unknown): boolean {
+  if (!(error instanceof Error) || error instanceof Blocked) return false;
+  return error.name === "TimeoutError" || error.message.includes("net::ERR_");
 }
 
 /**
