@@ -111,21 +111,36 @@ Deno.test("a tab gives up on a page that never arrives at all", async () => {
   // Amazon never starts answering. The walk stops, so that the department is
   // left where it stopped rather than recorded as having nothing in it.
   const page = new FakePage(
-    Array.from({ length: 6 }, timedOut),
+    Array.from({ length: 11 }, timedOut),
   );
 
   await assertRejects(
     () => tabOver(page).listing(ELECTRONICS, 7),
     Blocked,
   );
-  assertEquals(page.asked.length, 6);
+  assertEquals(page.asked.length, 11);
+  // The wait doubles until it is long enough, then holds there: a block that
+  // has already outlasted five minutes is waited out at that rate rather than
+  // at one that runs away into hours.
+  assertEquals(page.waited, [
+    5_000,
+    10_000,
+    20_000,
+    40_000,
+    80_000,
+    160_000,
+    300_000,
+    300_000,
+    300_000,
+    300_000,
+  ]);
 });
 
 Deno.test("a product page that never arrives stops the walk", async () => {
   // A page that would not come says nothing about the product behind it, so
   // it is not written off the way a product page that loads and holds no
   // product is.
-  const page = new FakePage(Array.from({ length: 6 }, timedOut));
+  const page = new FakePage(Array.from({ length: 11 }, timedOut));
 
   await assertRejects(
     () => tabOver(page).read("B00000001", ELECTRONICS),

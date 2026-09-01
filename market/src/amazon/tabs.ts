@@ -16,17 +16,28 @@ import type { RunLog } from "../run_log.ts";
 import type { AmazonUrls } from "./urls.ts";
 
 /**
- * How many times a blocked page is asked for again before giving up. The
- * doubling below turns this into how long a walk will wait out a block: five
- * retries wait a little over two and a half minutes in total, and a walk
- * Amazon has gone quiet on spends thirty seconds timing out before each of
- * them, so it holds on for about five minutes before it stops. That is longer
- * than the throttles seen so far, which have run a minute or two.
+ * How many times a blocked page is asked for again before giving up. With the
+ * waits below this comes to about half an hour of holding on: twenty-five
+ * minutes of waiting, and a walk Amazon has gone quiet on spends thirty
+ * seconds timing out before each attempt on top of that.
+ *
+ * The length is measured rather than picked. A walk that waited five minutes
+ * still lost a run to a block that ran from 17:53:36 to past 18:06:36 — over
+ * thirteen minutes — so the wait has to be long enough to sit through one of
+ * those and still have tries left.
  */
-const MAX_RETRIES = 5;
+const MAX_RETRIES = 10;
 
 /** How long to wait out the first block; each retry waits twice as long. */
 const FIRST_BACKOFF_MS = 5_000;
+
+/**
+ * How long a single wait grows to before it stops doubling. Past this the
+ * doubling is what gives up rather than the walk: a block already long enough
+ * to reach here is one to keep asking through at a steady rate, not one to
+ * spend hours asleep over and miss the end of.
+ */
+const MAX_BACKOFF_MS = 300_000;
 
 /** What a run reading Amazon's pages needs of its settings. */
 export interface ReadingSettings {
@@ -192,7 +203,7 @@ export class Tab implements Reader {
       );
       await this.gate.dismiss(block);
       await this.page.waitForTimeout(backoffMs);
-      backoffMs *= 2;
+      backoffMs = Math.min(backoffMs * 2, MAX_BACKOFF_MS);
       block = await this.open(url);
     }
 
