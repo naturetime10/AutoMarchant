@@ -136,11 +136,35 @@ Deno.test("a tab gives up on a page that never arrives at all", async () => {
   ]);
 });
 
-Deno.test("a product page that never arrives stops the walk", async () => {
-  // A page that would not come says nothing about the product behind it, so
-  // it is not written off the way a product page that loads and holds no
-  // product is.
+Deno.test("a product page that never arrives costs that product only", async () => {
+  // Amazon drops a request here and there rather than going quiet altogether,
+  // and a tab that draws a long enough run of them has still not learned that
+  // the walk is being turned away — the tabs beside it are reading. So the
+  // product is left in the queue for the next walk, the way one whose page
+  // will not load is, rather than the run ending while it is working.
   const page = new FakePage(Array.from({ length: 11 }, timedOut));
+
+  assertEquals(await tabOver(page).read("B00000001", ELECTRONICS), undefined);
+  assertEquals(page.asked.length, 11);
+});
+
+Deno.test("a listing that never arrives stops the walk", async () => {
+  // The listings are what a walk advances on, so one that will not come is
+  // the end of the walk rather than of a page: kept asking for, it would page
+  // its way through a department writing nothing down.
+  const page = new FakePage(Array.from({ length: 11 }, timedOut));
+
+  await assertRejects(
+    () => tabOver(page).listing(ELECTRONICS, 7),
+    Blocked,
+  );
+});
+
+Deno.test("a product page Amazon refuses outright stops the walk", async () => {
+  // A gate or a 503 is Amazon saying it is turning this walk away, rather
+  // than a request that went missing. There is nothing to be gained by
+  // reading on, so the run stops on it however it was met.
+  const page = new FakePage(Array.from({ length: 11 }, () => arrived(503)));
 
   await assertRejects(
     () => tabOver(page).read("B00000001", ELECTRONICS),

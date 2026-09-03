@@ -36,6 +36,9 @@ Deno.test("an error about the page itself is not a block", () => {
   // The page arrived and the run made something of it; asking again would
   // only meet the same page.
   assertEquals(unanswered(new TypeError("selector is not a function")), false);
-  assertEquals(unanswered(new Blocked("Amazon refused the page")), false);
+  assertEquals(
+    unanswered(new Blocked("Amazon refused the page", "refused")),
+    false,
+  );
   assertEquals(unanswered("not an error at all"), false);
 });

@@ -57,7 +57,7 @@ class Listings implements Pages, Reader {
   read(asin: string, department: Department): Promise<Product | undefined> {
     this.readers.push(asin);
     if (this.blocked.includes(asin)) {
-      return Promise.reject(new Blocked("Amazon refused the page"));
+      return Promise.reject(new Blocked("Amazon refused the page", "refused"));
     }
     if (this.missing.includes(asin)) return Promise.resolve(undefined);
     return Promise.resolve({

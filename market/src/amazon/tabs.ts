@@ -169,7 +169,12 @@ export class Tab implements Reader {
     } catch (error) {
       // A page Amazon refused says nothing about the product behind it, so
       // the run stops on it rather than spending one of the product's tries.
-      if (error instanceof Blocked) throw error;
+      // A page that never came is not that: Amazon drops a request here and
+      // there while answering the tabs beside this one, and a walk that ends
+      // on one ends while it is working. That costs the product, which stays
+      // in the queue for the next walk — the listings are what say whether
+      // Amazon has gone quiet altogether, and a walk stops on those.
+      if (error instanceof Blocked && error.block !== "unanswered") throw error;
       await this.log.error(
         `    ${asin}  skipped: ${
           error instanceof Error ? error.message : error
@@ -213,6 +218,7 @@ export class Tab implements Reader {
       await this.diagnostics.save(this.page);
       throw new Blocked(
         `${BLOCK_REASON[block]} for ${url}, ${MAX_RETRIES + 1} times over`,
+        block,
       );
     }
   }

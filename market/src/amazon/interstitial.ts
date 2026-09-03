@@ -38,8 +38,17 @@ export const BLOCK_REASON: Record<Exclude<Block, "none">, string> = {
  * Amazon serving something other than the page asked for, however often it is
  * asked for. It says nothing about the page behind it, so a walk that meets
  * one stops rather than writing off what it could not read.
+ *
+ * Which block it was is carried along, because they do not all say the same
+ * thing. A gate or a 503 is Amazon turning this walk away and means it; a
+ * page that simply never came may be no more than a request dropped while
+ * the tabs beside it read on.
  */
-export class Blocked extends Error {}
+export class Blocked extends Error {
+  constructor(message: string, readonly block: Exclude<Block, "none">) {
+    super(message);
+  }
+}
 
 /**
  * The statuses Amazon answers a walk it will not serve with: 503 when it
